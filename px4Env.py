@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 """
 作者: John Bass, 修改为Gym环境接口
@@ -12,6 +11,8 @@ from numpy import sin, cos, tan, pi, sign, sqrt
 from numpy.linalg import norm
 import matplotlib.pyplot as plt
 import time
+import csv
+import os
 
 import gymnasium as gym
 from gymnasium import spaces
@@ -42,7 +43,7 @@ class QuadcopterEnv(gym.Env):
     基于PX4控制算法和动力学。
     """
 
-    metadata = {'render.modes': ['human', 'rgb_array']}
+    metadata = {'render.modes': ['human', 'rgb_array', 'data_log']}
 
     def __init__(self,
                  control_type: str = "xyz_pos",
@@ -86,6 +87,45 @@ class QuadcopterEnv(gym.Env):
         self.wind_type = wind_type
         self.wind_strength = wind_strength
         self.render_mode = render_mode
+
+        # 奖励权重（即时）
+        self.reward_weights = dict(
+            w_pos_xy=0.8,
+            w_pos_z=1.2,
+            w_vel_xy=0.10,
+            w_vel_z=0.12,
+            w_att=0.15,
+            w_omega=0.05,
+        )
+
+        # Segment 权重（窗口奖励）
+        self.segment_weights = dict(
+            W_pos_xy=4.0,
+            W_pos_z=6.0,
+            W_vel_xy=1.0,
+            W_vel_z=1.2,
+            W_att_roll=1.2,
+            W_att_pitch=1.2,
+            W_omega=0.6,
+            # W_u=2e-7,
+            # W_dv=0.05,
+            # W_domega=0.02,
+            # W_du=2e-6,
+            W_u=0.0,
+            W_dv=0.0,
+            W_domega=0.0,
+            W_du=0.0,
+            W_sat=3.0,
+            W_over=1.5
+        )
+
+        # 限制与判据
+        self.limits = dict(
+            w_cmd_min=0.0,
+            w_cmd_max=2e4,
+            overshoot_z_tol=0.2,
+            normalize_rate_by_dt=True  # 平滑性指标按dt归一
+        )
 
         # 回合跟踪（以RL步为单位）
         self.current_step = 0
@@ -180,12 +220,86 @@ class QuadcopterEnv(gym.Env):
         # 约束计数
         self.seg_saturation_hits = 0
         self.seg_overshoot_hits = 0
+        
         # 上一时刻缓存（用于差分）
         self._seg_prev_vel = None
         self._seg_prev_omega = None
         self._seg_prev_w_cmd = None
         # 最近一次指标
         self.last_segment_metrics = None
+
+    # 统一的指标/误差提取（供奖励与segment累积复用）
+    def _extract_metrics(self, sDes: np.ndarray, state: Optional[np.ndarray] = None) -> Dict[str, Any]:
+        """
+        从 sDes 及当前状态（或给定 state）提取误差指标。
+        返回:
+            - pos_err_xy, pos_err_z
+            - vel_err_xy, vel_err_z
+            - att_norm, att_err_roll, att_err_pitch, att_err_yaw
+            - omega_norm, omega_err_p/q/r
+            - pos_err_vec, vel_err_vec
+        """
+        pos_ref = sDes[0:3]
+        vel_ref = sDes[3:6]
+        eul_ref = sDes[12:15]
+        omega_ref = sDes[15:18]
+
+        if state is not None:
+            pos = state[0:3]
+            quat = state[3:7]
+            vel = state[7:10]
+            omega = state[10:13]
+            euler = self._quaternion_to_euler(quat)
+        else:
+            pos = self.quad.pos
+            vel = self.quad.vel
+            euler = self.quad.euler
+            omega = self.quad.omega
+
+        # wrap 欧拉角误差到 (-pi, pi]，避免跨界过大误差（可选）
+        def angle_wrap(a):
+            return (a + np.pi) % (2 * np.pi) - np.pi
+
+        pos_err_vec = pos_ref - pos
+        pos_err_xy = float(np.linalg.norm(pos_err_vec[:2]))
+        pos_err_z = float(np.abs(pos_err_vec[2]))
+
+        vel_err_vec = vel_ref - vel
+        vel_err_xy = float(np.linalg.norm(vel_err_vec[:2]))
+        vel_err_z = float(np.abs(vel_err_vec[2]))
+
+        att_err_vec = eul_ref - euler
+        # 可选角度包裹
+        att_err_vec = np.array([angle_wrap(att_err_vec[0]),
+                                angle_wrap(att_err_vec[1]),
+                                angle_wrap(att_err_vec[2])], dtype=float)
+        att_err_roll = float(att_err_vec[0])
+        att_err_pitch = float(att_err_vec[1])
+        att_err_yaw = float(att_err_vec[2])
+        att_norm = float(np.linalg.norm(att_err_vec))
+
+        omega_err_vec = omega_ref - omega
+        omega_err_p = float(omega_err_vec[0])
+        omega_err_q = float(omega_err_vec[1])
+        omega_err_r = float(omega_err_vec[2])
+        omega_norm = float(np.linalg.norm(omega_err_vec))
+
+        return {
+            "pos_err_xy": pos_err_xy,
+            "pos_err_z": pos_err_z,
+            "vel_err_xy": vel_err_xy,
+            "vel_err_z": vel_err_z,
+            "att_norm": att_norm,
+            "att_err_roll": abs(att_err_roll),   # segment 中通常用绝对偏离
+            "att_err_pitch": abs(att_err_pitch),
+            "att_err_yaw": att_err_yaw,
+            "omega_norm": omega_norm,
+            "omega_err_p": omega_err_p,
+            "omega_err_q": omega_err_q,
+            "omega_err_r": omega_err_r,
+            "pos_err_vec": pos_err_vec,
+            "vel_err_vec": vel_err_vec,
+        }
 
     # =========================
     # Gym API
@@ -213,13 +327,16 @@ class QuadcopterEnv(gym.Env):
         self.pos_history = [self.quad.pos.copy()]
         self.target_history = [self.target_pos.copy()]
 
+        self.step_action = None
+        self.step_reward = None
+
         obs = self._get_observation()
         info = self._get_info()
         return obs, info
 
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """执行一个环境步骤：保持该action在rl_dt时长内，包含多个仿真子步"""
-        log.info(f"Step {self.current_step}: action={action}")
+        self.step_action = action
         action = np.clip(action, 0.0, 1.0)          # Action参数剪切处理
         self._apply_pid_parameters(action)          # 将参数写入PID控制器
 
@@ -233,15 +350,16 @@ class QuadcopterEnv(gym.Env):
             sDes = self.traj.desiredState(self.time, self.dt, self.quad)        # 期望轨迹
             self.ctrl.controller(self.traj, self.quad, sDes, self.dt)           # 控制器更新
             self.quad.update(self.time, self.dt, self.ctrl.w_cmd, self.wind)    # 动力学更新
+            state = self.quad.state
 
             # 时间推进与采样
             self.time += self.dt
 
-            # 分段统计累积（每个仿真子步采样一次）
+            # 分段奖励数据采样（每个仿真子步采样一次，采样窗口segment_window=3s）
             self._accumulate_segment_metrics(sDes)
 
             # 即时奖励（dense，细粒度，引导稳定）
-            step_reward_dense_sum += self._dense_reward_instant()
+            step_reward_dense_sum += self._dense_reward_instant(sDes, state)
 
         # RL步计数
         self.current_step += 1
@@ -254,6 +372,7 @@ class QuadcopterEnv(gym.Env):
 
         # step奖励 = 平均即时dense + 分段奖励（若触发）
         reward = (step_reward_dense_sum / substeps) + segment_reward
+        self.step_reward = reward
         self.episode_reward += reward
 
         # 终止/截断判定
@@ -354,103 +473,29 @@ class QuadcopterEnv(gym.Env):
     # =========================
     # 奖励设计
     # =========================
-    def _dense_reward_instant(self) -> float:
+    def _dense_reward_instant(self, sDes, state) -> float:
         """
         即时（密集）奖励：每个仿真子步计算。
         - 分轴位置误差（XY、Z分权）
         - 速度跟踪误差（相对 v_ref）
         - 姿态误差（phi、theta 分开）
         - 角速度范数
-        - 轻微的平滑性（动作/状态变化率）可选
         """
-        # 从轨迹取参考
-        sDes = self.traj.desiredState(self.time, self.dt, self.quad)
-        pos_ref = sDes[0:3]
-        vel_ref = sDes[3:6]
-        # eul_ref = sDes[12:15]  # 若需要姿态参考，这里可用
-
-        # 分轴位置误差
-        pos_err_vec = self.quad.pos - pos_ref
-        ex, ey, ez = pos_err_vec[0], pos_err_vec[1], pos_err_vec[2]
-        pos_err_xy = np.sqrt(ex**2 + ey**2)
-        pos_err_z = np.abs(ez)
-
-        # 速度跟踪误差（相对参考）
-        vel_err_vec = self.quad.vel - vel_ref
-        vel_err_xy = np.linalg.norm(vel_err_vec[:2])
-        vel_err_z = np.abs(vel_err_vec[2])
-
-        # 姿态与角速度（分轴/总体）
-        phi, theta, psi = self.quad.euler  # 偏航误差可在轨迹需要时加入
-        att_err_roll = np.abs(phi)
-        att_err_pitch = np.abs(theta)
-        omega = self.quad.omega
-        omega_norm = np.linalg.norm(omega)
-
-        # 平滑性（局部项，可选）：状态变化率与控制变化率
-        # 需要缓存上一时刻值，可在 env.__init__ 中初始化 self._prev_vel, self._prev_omega, self._prev_w_cmd
-        dv = 0.0
-        domega = 0.0
-        du = 0.0
-        if hasattr(self, "_prev_vel") and self._prev_vel is not None:
-            dv = float(np.linalg.norm(self.quad.vel - self._prev_vel))
-        if hasattr(self, "_prev_omega") and self._prev_omega is not None:
-            domega = float(np.linalg.norm(self.quad.omega - self._prev_omega))
-        if hasattr(self.ctrl, "w_cmd"):
-            if not hasattr(self, "_prev_w_cmd") or self._prev_w_cmd is None:
-                self._prev_w_cmd = np.copy(self.ctrl.w_cmd)
-            du = float(np.linalg.norm(self.ctrl.w_cmd - self._prev_w_cmd))
-            self._prev_w_cmd = np.copy(self.ctrl.w_cmd)
-        self._prev_vel = np.copy(self.quad.vel)
-        self._prev_omega = np.copy(self.quad.omega)
-
-        # 权重（保守型）
-        w_pos_xy = 0.8
-        w_pos_z = 1.2
-        w_vel_xy = 0.10
-        w_vel_z = 0.12
-        w_att_roll = 0.15
-        w_att_pitch = 0.15
-        w_omega = 0.05
-        # 平滑性局部权重（非常小，避免盖过主项）
-        w_dv = 0.01
-        w_domega = 0.005
-        w_du = 1e-6
-
+        m = self._extract_metrics(sDes, state)
+        rw = self.reward_weights
         dense = -(
-            w_pos_xy * pos_err_xy +
-            w_pos_z * pos_err_z +
-            w_vel_xy * vel_err_xy +
-            w_vel_z * vel_err_z +
-            w_att_roll * att_err_roll +
-            w_att_pitch * att_err_pitch +
-            w_omega * omega_norm +
-            w_dv * dv + w_domega * domega + w_du * du
+            rw["w_pos_xy"] * m["pos_err_xy"] +
+            rw["w_pos_z"]  * m["pos_err_z"]  +
+            rw["w_vel_xy"] * m["vel_err_xy"] +
+            rw["w_vel_z"]  * m["vel_err_z"]  +
+            rw["w_att"]    * m["att_norm"]   +
+            rw["w_omega"]  * m["omega_norm"]
         )
         return float(dense)
 
     def _accumulate_segment_metrics(self, sDes):
         """在每个仿真子步累积 segment 窗口统计量（分轴 + 总体 + 平滑性）"""
-        pos_ref = sDes[0:3]
-        vel_ref = sDes[3:6]
-
-        # 分轴位置误差
-        pos_err = self.quad.pos - pos_ref
-        ex, ey, ez = pos_err[0], pos_err[1], pos_err[2]
-        pos_err_xy = np.sqrt(ex**2 + ey**2)
-        pos_err_z = np.abs(ez)
-
-        # 速度跟踪误差
-        vel_err = self.quad.vel - vel_ref
-        vel_err_xy = np.linalg.norm(vel_err[:2])
-        vel_err_z = np.abs(vel_err[2])
-
-        # 姿态与角速度分轴
-        phi, theta, psi = self.quad.euler
-        att_err_roll = np.abs(phi)
-        att_err_pitch = np.abs(theta)
-        omega = self.quad.omega
-        omega_norm = np.linalg.norm(omega)
+        m = self._extract_metrics(sDes, state=None)
 
         # 控制能量
         if hasattr(self.ctrl, 'w_cmd') and self.ctrl.w_cmd is not None:
@@ -458,41 +503,53 @@ class QuadcopterEnv(gym.Env):
         else:
             control_effort = 0.0
 
-        # 平滑性（时间变化率）——对 segment 用平方累积，更稳
+        # 平滑性（时间变化率）——对 segment 用平方累积，更稳；可选做 dt 归一化
         dv = 0.0
         domega = 0.0
         du = 0.0
-        if hasattr(self, "_seg_prev_vel") and self._seg_prev_vel is not None:
+        if self._seg_prev_vel is not None:
             dv = float(np.linalg.norm(self.quad.vel - self._seg_prev_vel))
-        if hasattr(self, "_seg_prev_omega") and self._seg_prev_omega is not None:
+        if self._seg_prev_omega is not None:
             domega = float(np.linalg.norm(self.quad.omega - self._seg_prev_omega))
         if hasattr(self.ctrl, "w_cmd"):
-            if not hasattr(self, "_seg_prev_w_cmd") or self._seg_prev_w_cmd is None:
+            if self._seg_prev_w_cmd is None and self.ctrl.w_cmd is not None:
                 self._seg_prev_w_cmd = np.copy(self.ctrl.w_cmd)
-            du = float(np.linalg.norm(self.ctrl.w_cmd - self._seg_prev_w_cmd))
-            self._seg_prev_w_cmd = np.copy(self.ctrl.w_cmd)
+            if self.ctrl.w_cmd is not None and self._seg_prev_w_cmd is not None:
+                du = float(np.linalg.norm(self.ctrl.w_cmd - self._seg_prev_w_cmd))
+                self._seg_prev_w_cmd = np.copy(self.ctrl.w_cmd)
+
+        if self.limits.get("normalize_rate_by_dt", True) and self.dt > 0:
+            inv_dt = 1.0 / self.dt
+            dv *= inv_dt
+            domega *= inv_dt
+            du *= inv_dt
+
         self._seg_prev_vel = np.copy(self.quad.vel)
         self._seg_prev_omega = np.copy(self.quad.omega)
 
         # 饱和与简单超调判据
         saturation_hit = 0
         if hasattr(self.ctrl, 'w_cmd') and self.ctrl.w_cmd is not None:
-            if np.any(self.ctrl.w_cmd < 0.0) or np.any(self.ctrl.w_cmd > 2e4):
+            wmin, wmax = self.limits["w_cmd_min"], self.limits["w_cmd_max"]
+            if np.any(self.ctrl.w_cmd < wmin) or np.any(self.ctrl.w_cmd > wmax):
                 saturation_hit = 1
 
-        overshoot_hit = 1 if (self.quad.pos[2] - self.target_pos[2]) * np.sign(self.quad.vel[2]) > 0 and abs(self.quad.pos[2] - self.target_pos[2]) > 0.2 else 0
+        z_err = float(self.quad.pos[2] - self.target_pos[2])
+        vz = float(self.quad.vel[2])
+        overshoot_tol = self.limits["overshoot_z_tol"]
+        overshoot_hit = 1 if (z_err * np.sign(vz) > 0 and abs(z_err) > overshoot_tol) else 0
 
         # 分段累积（平方和/总和）
         # 位置与速度分轴
-        self.seg_sum_pos_err_xy2 = getattr(self, "seg_sum_pos_err_xy2", 0.0) + pos_err_xy**2
-        self.seg_sum_pos_err_z2  = getattr(self, "seg_sum_pos_err_z2", 0.0)  + pos_err_z**2
-        self.seg_sum_vel_err_xy2 = getattr(self, "seg_sum_vel_err_xy2", 0.0) + vel_err_xy**2
-        self.seg_sum_vel_err_z2  = getattr(self, "seg_sum_vel_err_z2", 0.0)  + vel_err_z**2
+        self.seg_sum_pos_err_xy2 = getattr(self, "seg_sum_pos_err_xy2", 0.0) + m["pos_err_xy"]**2
+        self.seg_sum_pos_err_z2  = getattr(self, "seg_sum_pos_err_z2", 0.0)  + m["pos_err_z"]**2
+        self.seg_sum_vel_err_xy2 = getattr(self, "seg_sum_vel_err_xy2", 0.0) + m["vel_err_xy"]**2
+        self.seg_sum_vel_err_z2  = getattr(self, "seg_sum_vel_err_z2", 0.0)  + m["vel_err_z"]**2
 
         # 姿态与角速度
-        self.seg_sum_att_roll2   = getattr(self, "seg_sum_att_roll2", 0.0)   + att_err_roll**2
-        self.seg_sum_att_pitch2  = getattr(self, "seg_sum_att_pitch2", 0.0)  + att_err_pitch**2
-        self.seg_sum_omega2      = getattr(self, "seg_sum_omega2", 0.0)      + omega_norm**2
+        self.seg_sum_att_roll2   = getattr(self, "seg_sum_att_roll2", 0.0)   + m["att_err_roll"]**2
+        self.seg_sum_att_pitch2  = getattr(self, "seg_sum_att_pitch2", 0.0)  + m["att_err_pitch"]**2
+        self.seg_sum_omega2      = getattr(self, "seg_sum_omega2", 0.0)      + m["omega_norm"]**2
 
         # 能量与平滑性
         self.seg_sum_control_effort = getattr(self, "seg_sum_control_effort", 0.0) + control_effort
@@ -529,35 +586,21 @@ class QuadcopterEnv(gym.Env):
         rmse_pos_total = np.sqrt((self.seg_sum_pos_err_xy2 + self.seg_sum_pos_err_z2) / self.seg_samples)
         rmse_vel_total = np.sqrt((self.seg_sum_vel_err_xy2 + self.seg_sum_vel_err_z2) / self.seg_samples)
 
-        # 权重（保守型，轨迹任务）
-        W_pos_xy = 4.0
-        W_pos_z  = 6.0
-        W_vel_xy = 1.0
-        W_vel_z  = 1.2
-        W_att_roll  = 1.2
-        W_att_pitch = 1.2
-        W_omega  = 0.6
-        W_u      = 2e-7         # 能量尺度大，系数很小
-        W_dv     = 0.05         # 短期平滑性
-        W_domega = 0.02
-        W_du     = 2e-6
-        W_sat    = 3.0
-        W_over   = 1.5
-
+        sw = self.segment_weights
         segment_reward = -(
-            W_pos_xy * rmse_pos_xy +
-            W_pos_z  * rmse_pos_z  +
-            W_vel_xy * rmse_vel_xy +
-            W_vel_z  * rmse_vel_z  +
-            W_att_roll  * rmse_att_roll +
-            W_att_pitch * rmse_att_pitch +
-            W_omega  * rms_omega +
-            W_u      * mean_control_effort +
-            W_dv     * rms_dv +
-            W_domega * rms_domega +
-            W_du     * rms_du +
-            W_sat    * self.seg_saturation_hits +
-            W_over   * self.seg_overshoot_hits
+            sw["W_pos_xy"] * rmse_pos_xy +
+            sw["W_pos_z"]  * rmse_pos_z  +
+            sw["W_vel_xy"] * rmse_vel_xy +
+            sw["W_vel_z"]  * rmse_vel_z  +
+            sw["W_att_roll"]  * rmse_att_roll +
+            sw["W_att_pitch"] * rmse_att_pitch +
+            sw["W_omega"]  * rms_omega +
+            sw["W_u"]      * mean_control_effort +
+            sw["W_dv"]     * rms_dv +
+            sw["W_domega"] * rms_domega +
+            sw["W_du"]     * rms_du +
+            sw["W_sat"]    * self.seg_saturation_hits +
+            sw["W_over"]   * self.seg_overshoot_hits
         )
 
         metrics = {
@@ -587,8 +630,8 @@ class QuadcopterEnv(gym.Env):
         }
 
         overflow = self.segment_time - self.segment_window
-        self._reset_segment_accumulators()
         self.segment_time = max(0.0, overflow)
+        self._reset_segment_accumulators()                  # 重置分段累积器
 
         return float(segment_reward), metrics
 
@@ -610,16 +653,20 @@ class QuadcopterEnv(gym.Env):
         return False
 
     def _get_info(self) -> Dict:
-        pos_error = np.linalg.norm(self.quad.pos - self.target_pos)
+        pos_error = float(np.linalg.norm(self.quad.pos - self.target_pos))
         info = {
             'position': self.quad.pos.copy(),
             'velocity': self.quad.vel.copy(),
             'attitude': self.quad.euler.copy(),
-            'target_position': self.target_pos.copy(),
-            'position_error': pos_error,
+            'angularvelocity': self.quad.omega.copy(),
+            'pos_ref': self.traj.desPos.copy(),
+            'vel_ref': self.traj.desVel.copy(),
+            'att_ref': self.traj.desEul.copy(),
+            'angularvel_ref': self.traj.desPQR.copy(),
             'episode_reward': self.episode_reward,
             'time': self.time,
             'segment_time_accum': self.segment_time,
+            'position_error': pos_error,
         }
         if self.last_segment_metrics is not None:
             info['last_segment'] = self.last_segment_metrics
@@ -628,7 +675,7 @@ class QuadcopterEnv(gym.Env):
     # =========================
     # 渲染与关闭
     # =========================
-    def render(self, mode: str = 'human'):
+    def render(self, mode: str = 'data_log'):
         try:
             if mode == 'human':
                 if self.fig is None:
@@ -640,10 +687,6 @@ class QuadcopterEnv(gym.Env):
                     self.ax.clear()
                     pos = self.quad.pos
                     self.ax.scatter(pos[0], pos[1], pos[2], color='red', s=100, label='Quadcopter')  # type: ignore
-
-                    target = self.target_pos
-                    self.ax.scatter(target[0], target[1], target[2],
-                                    color='green', s=100, marker='*', label='Target')  # type: ignore
 
                     if len(self.pos_history) > 1:
                         history = np.array(self.pos_history)
@@ -668,7 +711,7 @@ class QuadcopterEnv(gym.Env):
                     title_seg = ""
                     if self.last_segment_metrics is not None:
                         sr = self.last_segment_metrics.get('segment_reward', 0.0)
-                        rmse_pos = self.last_segment_metrics.get('rmse_pos', 0.0)
+                        rmse_pos = self.last_segment_metrics.get('rmse_pos_total', 0.0)
                         title_seg = f" | segR: {sr:.2f} RMSEpos:{rmse_pos:.2f}"
 
                     plt.title(f'Quadcopter - RL Step: {self.current_step}, EpR: {self.episode_reward:.2f}{title_seg}')
@@ -676,6 +719,30 @@ class QuadcopterEnv(gym.Env):
 
             elif mode == 'rgb_array':
                 return np.zeros((480, 640, 3), dtype=np.uint8)
+            
+            elif mode == 'data_log':
+                # 可配置记录项:每个step的状态、动作和奖励
+                log_dir = "log_data"
+                os.makedirs(log_dir, exist_ok=True)
+                csv_path = os.path.join(log_dir, "episode_log.csv")
+
+                data = {
+                    'step': self.current_step,
+                    'action': self.step_action,
+                    'reward': self.step_reward,
+                    'time': self.time,
+                    'segment_time_accum': self.segment_time,
+                }
+                if self.last_segment_metrics is not None:
+                    data.update(self.last_segment_metrics)
+
+                write_header = not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
+                with open(csv_path, mode='a', newline='') as f:
+                    writer = csv.DictWriter(f, fieldnames=list(data.keys()))
+                    if write_header:
+                        writer.writeheader()
+                    writer.writerow(data)
+
         except Exception as e:
             print(f"Render error: {e}")
             pass
@@ -692,12 +759,12 @@ if __name__ == "__main__":
     env = QuadcopterEnv(
         control_type="xyz_pos",
         trajectory_type=5,
-        max_episode_steps=2000,  # 以RL步计
+        max_episode_steps=200,  # 以RL步计
         dt=0.005,                # 仿真步长
         rl_dt=0.1,               # RL决策步长：每步保持0.1s
-        segment_window=5.0,      # 分段统计窗口5s
+        segment_window=3.0,      # 分段统计窗口3s
         target_pos=np.array([2.0, 2.0, 1.0]),
-        render_mode='human'
+        render_mode='data_log'
     )
 
     print("=== 四旋翼环境信息 ===")
@@ -720,9 +787,22 @@ if __name__ == "__main__":
         total_reward += reward
 
         if step % 1 == 0:       # 每个RL步都输出
-            pos_error = info['position_error']
-            print(f"RL步: {step:4d}, pos_err: {pos_error:.3f}m, 累计奖励: {total_reward:.2f}, 当前位置: [{info['position'][0]:.2f}, {info['position'][1]:.2f}, {info['position'][2]:.2f}]")
-            env.render()
+            pos = info['position']
+            vel = info['velocity']
+            att = info['attitude']
+            pos_ref = info['pos_ref']
+            vel_ref = info['vel_ref']
+            att_ref = info['att_ref']
+            ep_reward = info['episode_reward']
+            sim_time = info['time']
+            seg_time = info['segment_time_accum']
+
+            print(f"RL步: {step:4d}, 仿真时间: {sim_time:.2f}s, 累计奖励: {ep_reward:.2f}")
+            print(f"当前位置: [{pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}] | 目标位置: [{pos_ref[0]:.2f}, {pos_ref[1]:.2f}, {pos_ref[2]:.2f}]")
+            print(f"当前速度: [{vel[0]:.2f}, {vel[1]:.2f}, {vel[2]:.2f}] | 目标速度: [{vel_ref[0]:.2f}, {vel_ref[1]:.2f}, {vel_ref[2]:.2f}]")
+            print(f"当前姿态(欧拉): [{att[0]:.2f}, {att[1]:.2f}, {att[2]:.2f}] | 目标姿态: [{att_ref[0]:.2f}, {att_ref[1]:.2f}, {att_ref[2]:.2f}]")
+            print(f"分段累计时间: {seg_time:.2f}s")
+            env.render(mode=env.render_mode)
 
         if terminated:
             print(f"\n在第{step}个RL步终止!")
@@ -740,21 +820,6 @@ if __name__ == "__main__":
     print(f"总RL步数: {step + 1}")
     print(f"累计奖励: {total_reward:.2f}")
     print(f"平均奖励/步: {total_reward/(step + 1):.4f}")
-    print(f"最终位置: {info['position']}")
-    print(f"目标位置: {env.target_pos}")
-    print(f"最终位置误差: {info['position_error']:.3f}m")
-    print(f"最终速度: {info['velocity']}")
-    print(f"最终姿态(欧拉角): {info['attitude']}")
-    env.render()
+    env.render(mode=env.render_mode)
     env.close()
     print("\n仿真环境已关闭")
-
-
-
-# 调参建议：
-
-# 1.固定 dt=0.005, rl_dt=0.1, segment_window=2.0–3.0s，先看 dense 奖励是否稳定上升；
-# 2.打开 segment 奖励，观察 rmse_pos_xy/z 与 rms_du 是否下降；
-# 3.如果轨迹跟不上，提高 W_pos_xy/z 和 W_vel_xy/z；
-# 4.如果抖动/能量大，提高 W_u, W_du, W_domega；
-# 5.若电机常饱和，提高 W_sat，同时在控制器输出加硬/软限幅。
