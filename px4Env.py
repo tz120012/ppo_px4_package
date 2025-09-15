@@ -615,9 +615,9 @@ class QuadcopterEnv(gym.Env):
             if dt <= 1.0:
                 return 1.0
             elif dt <= 2.0:
-                return 0.5
+                return 0.001
             elif dt <= 3.0:
-                return 0.25
+                return 0.001**2
             else:
                 return 0.0  # 理论上不会出现，因为窗口最大 3s
 
