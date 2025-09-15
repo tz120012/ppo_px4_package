@@ -43,7 +43,7 @@ def main():
     # --------------------------- 
     Ti = 0
     Ts = 0.005
-    Tf = 20
+    Tf = 50
     ifsave = 0
 
     # Choose trajectory settings
@@ -51,14 +51,14 @@ def main():
     ctrlOptions = ["xyz_pos", "xy_vel_z_pos", "xyz_vel"]
     trajSelect = np.zeros(3)
 
-    # Select Control Type             (0: xyz_pos,                  1: xy_vel_z_pos,            2: xyz_vel)
+    # 选择控制类型            (0: xyz_pos,                  1: xy_vel_z_pos,            2: xyz_vel)
     ctrlType = ctrlOptions[0]   
     # Select Position Trajectory Type (0: hover,                    1: pos_waypoint_timed,      2: pos_waypoint_interp,    
     #                                  3: minimum velocity          4: minimum accel,           5: minimum jerk,           6: minimum snap
     #                                  7: minimum accel_stop        8: minimum jerk_stop        9: minimum snap_stop
     #                                 10: minimum jerk_full_stop   11: minimum snap_full_stop
     #                                 12: pos_waypoint_arrived     13: pos_waypoint_arrived_wait
-    trajSelect[0] = 5         
+    trajSelect[0] = 5        
     # Select Yaw Trajectory Type      (0: none                      1: yaw_waypoint_timed,      2: yaw_waypoint_interp     3: follow          4: zero)
     trajSelect[1] = 3           
     # Select if waypoint time is used, or if average speed is used to calculate waypoint time   (0: waypoint time,   1: average speed)
@@ -70,7 +70,7 @@ def main():
     quad = Quadcopter(Ti)
     traj = Trajectory(quad, ctrlType, trajSelect)
     ctrl = Control(quad, traj.yawType)
-    wind = Wind('None', 2.0, 90, -15)
+    wind = Wind('None', 2.0, 90, -15)           # 'None'  'SINE'  'RANDOMSINE'  'FIXED'
 
     # Trajectory for First Desired States
     # ---------------------------
