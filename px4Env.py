@@ -50,9 +50,9 @@ class QuadcopterEnv(gym.Env):
                  trajectory_type: int = 5,
                  yaw_type: int = 3,
                  max_episode_steps: int = 2000,     # 每个回合的最大步数（以RL步计）约20s
-                 dt: float = 0.005,         # 仿真积分时间步长（动力学/控制）
-                 rl_dt: float = 1,          # RL决策时间步长（每次step保持action的时长）
-                 segment_window: float = 3.0,  # 滑动窗口长度（秒）
+                 dt: float = 0.01,                  # 仿真积分时间步长（动力学/控制）
+                 rl_dt: float = 1,                  # RL决策时间步长（每次step保持action的时长）
+                 segment_window: float = 3.0,       # 滑动窗口长度（秒）
                  target_pos: Optional[np.ndarray] = None,
                  wind_type: str = 'None',
                  wind_strength: float = 2.0,
