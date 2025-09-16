@@ -1,30 +1,20 @@
 # -*- coding: utf-8 -*-
-"""
-作者: John Bass, 修改为Gym环境接口
-邮箱: john.bobzwik@gmail.com
-许可证: MIT
-请随意使用和修改，但请保留上述信息。谢谢！
-"""
+import os
+import csv
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Any
 
 import numpy as np
-from numpy import sin, cos, tan, pi, sign, sqrt
-from numpy.linalg import norm
 import matplotlib.pyplot as plt
-import time
-import csv
-import os
-from collections import deque
 
 import gymnasium as gym
 from gymnasium import spaces
-from typing import Dict, List, Optional, Tuple, Union, Any
 
 from trajectory import Trajectory
 from ctrl import Control
 from quadFiles.quad import Quadcopter
 from utils.windModel import Wind
 import utils
-import config
 
 import logging
 # 初始化日志
@@ -43,20 +33,19 @@ class QuadcopterEnv(gym.Env):
     一个Gym兼容的环境，用于训练四旋翼控制任务的RL智能体。
     基于PX4控制算法和动力学。
     """
-    # metadata = {"render_modes": ["human", "rgb_array", "data_log"]}
-
     def __init__(self,
                  control_type: str = "xyz_pos",
                  trajectory_type: int = 5,
                  yaw_type: int = 3,
-                 max_episode_steps: int = 2000,     # 每个回合的最大步数（以RL步计）约20s
+                 max_episode_steps: int = 2000,     # 每个回合的最大步数（以RL步计）
                  dt: float = 0.01,                  # 仿真积分时间步长（动力学/控制）
                  rl_dt: float = 1,                  # RL决策时间步长（每次step保持action的时长）
-                 segment_window: float = 3.0,       # 滑动窗口长度（秒）
                  target_pos: Optional[np.ndarray] = None,
+                 dense_reward_scale: float = 1.0,   # 即时奖励权重缩放
                  wind_type: str = 'None',
                  wind_strength: float = 2.0,
-                 render_mode: Optional[str] = None):
+                 render_mode: Optional[str] = None,
+                 test_env_mode: bool = False):      # 测试模式：在 step 末尾写 CSV
         """
         初始化四旋翼环境
 
@@ -66,12 +55,13 @@ class QuadcopterEnv(gym.Env):
             yaw_type: 偏航控制类型 (0-4)
             max_episode_steps: 每个回合的最大步数（以RL步计）
             rl_dt: RL 决策步长（秒），一个step保持action的时长
-            segment_window: 滑动窗口奖励时长（秒），默认 3s
             dt: 仿真时间步长（秒）
             target_pos: 目标位置 [x, y, z]
+            dense_reward_scale: 即时奖励缩放，便于调节奖励尺度
             wind_type: 风模型类型
             wind_strength: 风力强度
             render_mode: 渲染模式 ('human' 或 'rgb_array')
+            test_env_mode: 当为 True 时，step 末尾会将 info 写入 CSV 以便分析
         """
         super(QuadcopterEnv, self).__init__()
         # 环境参数
@@ -80,12 +70,13 @@ class QuadcopterEnv(gym.Env):
         self.yaw_type = yaw_type
         self.max_episode_steps = max_episode_steps
         self.rl_dt = rl_dt
-        self.segment_window = segment_window
         self.dt = dt
         self.target_pos = target_pos if target_pos is not None else np.array([2.0, 2.0, 1.0])
         self.wind_type = wind_type
         self.wind_strength = wind_strength
         self.render_mode = render_mode
+        self.dense_reward_scale = float(dense_reward_scale)
+        self.test_env_mode = test_env_mode
 
         # 奖励权重（即时）
         self.reward_weights = dict(
@@ -97,7 +88,7 @@ class QuadcopterEnv(gym.Env):
             w_omega=0.05,
         )
 
-        # Segment 权重（窗口奖励）
+        # Segment 权重（本步内样本的RMSE/均值聚合）
         self.segment_weights = dict(
             W_pos_xy=4.0,
             W_pos_z=6.0,
@@ -107,7 +98,7 @@ class QuadcopterEnv(gym.Env):
             W_att_pitch=1.2,
             W_omega=0.6,
 
-            # 暂时去掉平滑惩罚（可按需开启）
+            # 可按需开启
             W_u=0.0,
             W_dv=0.0,
             W_domega=0.0,
@@ -125,8 +116,7 @@ class QuadcopterEnv(gym.Env):
             normalize_rate_by_dt=True  # 平滑性指标按dt归一
         )
 
-        # 成功/失败的附加奖励
-        self.success_bonus = 500.0      # 任务完成时一次性正奖励
+        # 失败惩罚
         self.failure_penalty = -1500.0  # 非正常截断的惩罚
 
         # 回合跟踪（以RL步为单位）
@@ -151,7 +141,6 @@ class QuadcopterEnv(gym.Env):
             0.0, 0.0, 0.0,  # rate_I_gains: Ip, Iq, Ir
             0.0, 0.0, 0.0   # rate_D_gains: Dp, Dq, Dr
         ])
-
         self.pid_safe_max = np.array([
             2.0, 1.5,     # pos_P_gains
             5.0, 15.0,   # vel_P_gains
@@ -182,8 +171,16 @@ class QuadcopterEnv(gym.Env):
         self.ax = None
         self._ax_initialized = False
 
-        # 分段统计缓冲初始化（滑动窗口）
-        self._reset_segment_window()
+        # 步级日志与 segment 统计
+        self.step_log_rows = []             # 记录每个step的奖励构成，用于csv输出
+        self.last_segment_metrics = None    # 最近一次窗口指标（本实现为“本步聚合”，此字段用于info兼容）
+
+        # CSV 记录相关（仅 test_env_mode 时启用）
+        self._csv_dir = None
+        self._csv_path = None
+        self._csv_fh = None
+        self._csv_writer = None
+        self._csv_header_written = False
 
     # =========================
     # 仿真初始化与内部工具
@@ -219,23 +216,125 @@ class QuadcopterEnv(gym.Env):
         self.episode_tor_all        = np.zeros((T, len(self.quad.tor)))
 
         # 课程学习阶段
-        self.stage = 0          # 课程学习的阶段
+        self.stage = 0          # 初始课程学习的阶段
 
         # 子步越界保护标记
         self._force_truncate = False
 
-    def _reset_segment_window(self):
-        """初始化滑动窗口缓冲与差分缓存"""
-        self.window_max_samples = max(1, int(round(self.segment_window / self.dt)))
-        self.buf = deque(maxlen=self.window_max_samples)
+    # =========================
+    # CSV 工具
+    # =========================
+    def _open_step_csv(self):
+        """当 test_env_mode=True 时，在每次 reset 打开一个新的 CSV 文件并写表头"""
+        if not self.test_env_mode:
+            return
+        try:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            self._csv_dir = os.path.join("log_step_metrics", f"episode_{stamp}")
+            os.makedirs(self._csv_dir, exist_ok=True)
+            self._csv_path = os.path.join(self._csv_dir, "step_metrics.csv")
+            self._csv_fh = open(self._csv_path, mode="w", newline="")
+            self._csv_writer = csv.writer(self._csv_fh)
+            # 写表头
+            header = [
+                # 基本步信息
+                "step", "time_end", "executed_substeps",
+                "dense_mean", "segment_reward", "total_reward", "dense_scale",
+                # segment metrics
+                "segment_duration", "rmse_pos_xy", "rmse_pos_z", "rmse_vel_xy", "rmse_vel_z",
+                "rmse_att_roll", "rmse_att_pitch", "rms_omega",
+                "mean_control_effort", "rms_dv", "rms_domega", "rms_du",
+                "saturation_hits", "overshoot_hits",
+                # 额外观测 & 误差
+                "pos_x", "pos_y", "pos_z",
+                "vel_x", "vel_y", "vel_z",
+                "att_roll", "att_pitch", "att_yaw",
+                "omega_p", "omega_q", "omega_r",
+                "pos_ref_x", "pos_ref_y", "pos_ref_z",
+                "vel_ref_x", "vel_ref_y", "vel_ref_z",
+                "att_ref_roll", "att_ref_pitch", "att_ref_yaw",
+                "omega_ref_p", "omega_ref_q", "omega_ref_r",
+                "position_error", "episode_reward"
+            ]
+            self._csv_writer.writerow(header)
+            self._csv_header_written = True
+            log.info(f"[step-csv] Write to {self._csv_path}")
+        except Exception as e:
+            log.error(f"[step-csv] Open CSV failed: {e}")
+            self._csv_fh = None
+            self._csv_writer = None
+            self._csv_header_written = False
 
-        # 差分缓存
-        self._seg_prev_vel = None
-        self._seg_prev_omega = None
-        self._seg_prev_w_cmd = None
+    def _write_step_csv(self, info: Dict[str, Any]):
+        """将当前 step 的 info 写入 CSV（仅 test_env_mode=True 时）"""
+        if not self.test_env_mode or self._csv_writer is None or not self._csv_header_written:
+            return
+        try:
+            br = info.get("step_reward_breakdown", {})
+            last_seg = info.get("last_segment", {})  # 若 step_reward_breakdown 已含 segment，可用 br 覆盖
+            # 观测信息
+            pos = info.get("position", np.zeros(3, dtype=float))
+            vel = info.get("velocity", np.zeros(3, dtype=float))
+            att = info.get("attitude", np.zeros(3, dtype=float))
+            omg = info.get("angularvelocity", np.zeros(3, dtype=float))
+            pos_ref = info.get("pos_ref", np.zeros(3, dtype=float))
+            vel_ref = info.get("vel_ref", np.zeros(3, dtype=float))
+            att_ref = info.get("att_ref", np.zeros(3, dtype=float))
+            omg_ref = info.get("angularvel_ref", np.zeros(3, dtype=float))
 
-        # 最近一次窗口指标
-        self.last_segment_metrics = None
+            row = [
+                int(br.get("step", self.current_step)),
+                float(br.get("time_end", self.time)),
+                int(br.get("executed_substeps", 0)),
+                float(br.get("dense_mean", 0.0)),
+                float(br.get("segment_reward", 0.0)),
+                float(br.get("total_reward", 0.0)),
+                float(br.get("dense_scale", self.dense_reward_scale)),
+
+                float(br.get("segment_duration", last_seg.get("segment_duration", 0.0))),
+                float(br.get("rmse_pos_xy", last_seg.get("rmse_pos_xy", 0.0))),
+                float(br.get("rmse_pos_z", last_seg.get("rmse_pos_z", 0.0))),
+                float(br.get("rmse_vel_xy", last_seg.get("rmse_vel_xy", 0.0))),
+                float(br.get("rmse_vel_z", last_seg.get("rmse_vel_z", 0.0))),
+                float(br.get("rmse_att_roll", last_seg.get("rmse_att_roll", 0.0))),
+                float(br.get("rmse_att_pitch", last_seg.get("rmse_att_pitch", 0.0))),
+                float(br.get("rms_omega", last_seg.get("rms_omega", 0.0))),
+                float(br.get("mean_control_effort", last_seg.get("mean_control_effort", 0.0))),
+                float(br.get("rms_dv", last_seg.get("rms_dv", 0.0))),
+                float(br.get("rms_domega", last_seg.get("rms_domega", 0.0))),
+                float(br.get("rms_du", last_seg.get("rms_du", 0.0))),
+                float(br.get("saturation_hits", last_seg.get("saturation_hits", 0.0))),
+                float(br.get("overshoot_hits", last_seg.get("overshoot_hits", 0.0))),
+
+                float(pos[0]), float(pos[1]), float(pos[2]),
+                float(vel[0]), float(vel[1]), float(vel[2]),
+                float(att[0]), float(att[1]), float(att[2]),
+                float(omg[0]), float(omg[1]), float(omg[2]),
+                float(pos_ref[0]), float(pos_ref[1]), float(pos_ref[2]),
+                float(vel_ref[0]), float(vel_ref[1]), float(vel_ref[2]),
+                float(att_ref[0]), float(att_ref[1]), float(att_ref[2]),
+                float(omg_ref[0]), float(omg_ref[1]), float(omg_ref[2]),
+                float(info.get("position_error", 0.0)),
+                float(info.get("episode_reward", self.episode_reward)),
+            ]
+            self._csv_writer.writerow(row)
+            # 及时 flush，便于长跑中观察
+            self._csv_fh.flush()
+        except Exception as e:
+            log.error(f"[step-csv] Write CSV failed: {e}")
+
+    def _close_step_csv(self):
+        """关闭 CSV 文件"""
+        try:
+            if self._csv_fh is not None:
+                self._csv_fh.flush()
+                self._csv_fh.close()
+        finally:
+            self._csv_fh = None
+            self._csv_writer = None
+            self._csv_header_written = False
+            self._csv_dir = None
+            self._csv_path = None
 
     # 定义记录substep的历史数据的函数
     def record_episode_step(self):
@@ -271,12 +370,17 @@ class QuadcopterEnv(gym.Env):
         self.current_step = 0
         self.current_substep = 0
         self.episode_reward = 0.0
+        self.step_log_rows = []  # 清空步级日志
+        self.last_segment_metrics = None
 
         if options is not None and 'target_pos' in options:
             self.target_pos = np.array(options['target_pos'])
 
         self._initialize_simulation()
-        self._reset_segment_window()
+
+        # 如果是测试环境模式，打开新的 CSV 文件并写表头
+        self._close_step_csv()
+        self._open_step_csv()
 
         if options and options.get('random_init', False):
             noise = np.random.normal(0, 0.1, 3)
@@ -300,11 +404,14 @@ class QuadcopterEnv(gym.Env):
         substeps = max(1, int(round(self.rl_dt / self.dt)))     # 计算每个Step 需要多少个仿真子步
         step_reward_dense_sum = 0.0                             # 聚合该RL step内的即时奖励（dense）
 
+        step_samples: List[Dict[str, float]] = []
+        prev_cache = {"vel": None, "omega": None, "w_cmd": None}
+        executed_substeps = 0  # 本步实际执行的子步数（用于更精确均值化） 
+
         terminated = False
         truncated = False
-        success_just_now = False
 
-        # 在每个仿真步（步长：0.005s，200Hz）
+        # 在每个仿真步
         for _ in range(substeps):
             # 目标/控制/动力学推进
             sDes = self.traj.desiredState(self.time, self.dt, self.quad)        # 期望轨迹
@@ -317,15 +424,18 @@ class QuadcopterEnv(gym.Env):
             # 时间推进与采样
             self.time += self.dt
             self.current_substep += 1
+            executed_substeps += 1
 
             # 计算即时状态误差
             m = self._extract_metrics(sDes)
 
             # 即时奖励（dense，细粒度，引导稳定）
-            step_reward_dense_sum += self._dense_reward_instant(m)
+            dense_r = self._dense_reward_instant(m)
+            step_reward_dense_sum += dense_r
 
-            # 滑动窗口采样（每个仿真子步采样一次）
-            self._push_window_sample(m)
+            # 收集本步样本
+            sample = self._collect_step_sample(m, prev_cache)
+            step_samples.append(sample)
 
             # 过程内快速越界检查（如希望提前退出，可在此判定）
             if self._is_out_of_bounds():
@@ -335,14 +445,18 @@ class QuadcopterEnv(gym.Env):
         # RL步计数
         self.current_step += 1
 
-        # 滑动窗口分段奖励：每个 step 计算一次（覆盖最近 ~3 秒）
-        segment_reward, metrics = self._compute_segment_reward_from_window()
+        # step奖励 = 平均即时dense + 分段奖励（本步内聚合）
+        # 即时奖励
+        dense_mean = step_reward_dense_sum / max(1, executed_substeps)
+
+        # 本步分段奖励
+        segment_reward, metrics = self._compute_segment_reward_step(step_samples)
         self.last_segment_metrics = metrics if metrics else self.last_segment_metrics
+        
+        # 合成当步总奖励
+        reward = dense_mean + segment_reward  
 
-        # step奖励 = 平均即时dense + 窗口分段奖励
-        reward = (step_reward_dense_sum / max(1, min(substeps, self.current_substep))) + segment_reward
-
-        # 终止/截断判定（step 粒度收尾）
+        # 终止/截断判定
         # 1) 达到最大步数 -> terminated
         if self.current_step >= self.max_episode_steps or self._force_truncate:
             terminated = True
@@ -351,7 +465,7 @@ class QuadcopterEnv(gym.Env):
         if not terminated and self._is_out_of_bounds():
             truncated = True
 
-        # 成功奖励或失败惩罚
+        # 失败惩罚
         if truncated and not terminated:
             reward += self.failure_penalty
 
@@ -365,9 +479,37 @@ class QuadcopterEnv(gym.Env):
 
         obs = self._get_observation()
         info = self._get_info()
-        # 在info中包含本次分段奖励与指标
+
+        # 在 info 中回传每步奖励拆解，供分析
+        info["step_reward_breakdown"] = {
+            "step": int(self.current_step),
+            "time_end": float(self.time),
+            "executed_substeps": int(executed_substeps),
+            "dense_mean": float(dense_mean),
+            "segment_reward": float(segment_reward),
+            "total_reward": float(reward),
+            "dense_scale": float(self.dense_reward_scale),
+        }
         if metrics is not None:
-            info['last_segment'] = metrics
+            info["step_reward_breakdown"].update({
+                "segment_duration": metrics.get("segment_duration", 0.0),
+                "rmse_pos_xy": metrics.get("rmse_pos_xy", 0.0),
+                "rmse_pos_z": metrics.get("rmse_pos_z", 0.0),
+                "rmse_vel_xy": metrics.get("rmse_vel_xy", 0.0),
+                "rmse_vel_z": metrics.get("rmse_vel_z", 0.0),
+                "rmse_att_roll": metrics.get("rmse_att_roll", 0.0),
+                "rmse_att_pitch": metrics.get("rmse_att_pitch", 0.0),
+                "rms_omega": metrics.get("rms_omega", 0.0),
+                "mean_control_effort": metrics.get("mean_control_effort", 0.0),
+                "rms_dv": metrics.get("rms_dv", 0.0),
+                "rms_domega": metrics.get("rms_domega", 0.0),
+                "rms_du": metrics.get("rms_du", 0.0),
+                "saturation_hits": metrics.get("saturation_hits", 0.0),
+                "overshoot_hits": metrics.get("overshoot_hits", 0.0),
+            })
+
+        # 新增：仅在 test_env_mode=True 时写 CSV
+        self._write_step_csv(info)
 
         return obs, reward, terminated, truncated, info
 
@@ -538,47 +680,54 @@ class QuadcopterEnv(gym.Env):
             rw["w_att"]    * m["att_norm"]   +
             rw["w_omega"]  * m["omega_norm"]
         )
-        return float(dense)
+        return float(self.dense_reward_scale * dense)
 
-    def _push_window_sample(self, m: Dict[str, Any]):
-        """将当前子步的原子指标压入滑动窗口缓冲"""
+    def _collect_step_sample(self, m: Dict[str, Any], prev_cache: Dict[str, Any]) -> Dict[str, float]:
+        """
+        在本步子步中收集一次原子指标，用于步末聚合。
+        prev_cache: 用于计算 dv/domega/du 的上一子步缓存（本步内局部）。
+        返回当前子步的样本字典。
+        """
         # 控制能量
         if hasattr(self.ctrl, 'w_cmd') and self.ctrl.w_cmd is not None:
             control_effort = float(np.sum(np.square(self.ctrl.w_cmd)))
         else:
             control_effort = 0.0
 
-        # 平滑性（时间变化率）
+        # 平滑性（相邻子步差分，本步内）
         dv = 0.0
         domega = 0.0
         du = 0.0
-        if self._seg_prev_vel is not None:
-            dv = float(np.linalg.norm(self.quad.vel - self._seg_prev_vel))
-        if self._seg_prev_omega is not None:
-            domega = float(np.linalg.norm(self.quad.omega - self._seg_prev_omega))
-        if hasattr(self.ctrl, "w_cmd"):
-            if self._seg_prev_w_cmd is None and self.ctrl.w_cmd is not None:
-                self._seg_prev_w_cmd = np.copy(self.ctrl.w_cmd)
-            if self.ctrl.w_cmd is not None and self._seg_prev_w_cmd is not None:
-                du = float(np.linalg.norm(self.ctrl.w_cmd - self._seg_prev_w_cmd))
-                self._seg_prev_w_cmd = np.copy(self.ctrl.w_cmd)
 
+        if prev_cache.get("vel") is not None:
+            dv = float(np.linalg.norm(self.quad.vel - prev_cache["vel"]))
+        if prev_cache.get("omega") is not None:
+            domega = float(np.linalg.norm(self.quad.omega - prev_cache["omega"]))
+        if hasattr(self.ctrl, "w_cmd"):
+            if prev_cache.get("w_cmd") is not None and self.ctrl.w_cmd is not None:
+                du = float(np.linalg.norm(self.ctrl.w_cmd - prev_cache["w_cmd"]))
+
+        # 归一到每秒变化率（与原逻辑一致）
         if self.limits.get("normalize_rate_by_dt", True) and self.dt > 0:
             inv_dt = 1.0 / self.dt
             dv *= inv_dt
             domega *= inv_dt
             du *= inv_dt
 
-        self._seg_prev_vel = np.copy(self.quad.vel)
-        self._seg_prev_omega = np.copy(self.quad.omega)
+        # 更新缓存
+        prev_cache["vel"] = np.copy(self.quad.vel)
+        prev_cache["omega"] = np.copy(self.quad.omega)
+        if hasattr(self.ctrl, "w_cmd") and self.ctrl.w_cmd is not None:
+            prev_cache["w_cmd"] = np.copy(self.ctrl.w_cmd)
 
-        # 饱和与简单超调判据
+        # 饱和判定
         saturation_hit = 0
         if hasattr(self.ctrl, 'w_cmd') and self.ctrl.w_cmd is not None:
             wmin, wmax = self.limits["w_cmd_min"], self.limits["w_cmd_max"]
             if np.any(self.ctrl.w_cmd < wmin) or np.any(self.ctrl.w_cmd > wmax):
                 saturation_hit = 1
 
+        # z 方向超调判定
         z_err = float(self.quad.pos[2] - self.target_pos[2])
         vz = float(self.quad.vel[2])
         overshoot_tol = self.limits["overshoot_z_tol"]
@@ -592,80 +741,49 @@ class QuadcopterEnv(gym.Env):
             "att_roll2": m["att_err_roll"]**2,
             "att_pitch2": m["att_err_pitch"]**2,
             "omega2": m["omega_norm"]**2,
-            "u2": control_effort,           # 与原实现保持一致：w_cmd 的平方和
+            "u2": control_effort,
             "dv2": dv**2,
             "domega2": domega**2,
             "du2": du**2,
             "sat_hit": saturation_hit,
             "over_hit": overshoot_hit,
-            "t": float(self.time),          #  记录采样时间戳
         }
-        self.buf.append(entry)
+        return entry
 
-    def _compute_segment_reward_from_window(self) -> Tuple[float, Dict[str, float]]:
-        """基于滑动窗口缓冲计算分段奖励及指标"""
-        if len(self.buf) == 0:
+    def _compute_segment_reward_step(self, samples: List[Dict[str, float]]) -> Tuple[float, Dict[str, float]]:
+        """
+        基于“本步子步样本”计算一次分段奖励。
+        与原来的滑窗不同，这里对本步样本做简单均值/RMSE，不再做时间权重。
+        """
+        if len(samples) == 0:
             return 0.0, {}
 
-        now = self.time
+        import numpy as np
 
-        # 分段常数权重
-        def weight_for(dt: float) -> float:
-            # dt >= 0
-            if dt <= 1.0:
-                return 1.0
-            elif dt <= 2.0:
-                return 0.001
-            elif dt <= 3.0:
-                return 0.001**2
-            else:
-                return 0.0  # 理论上不会出现，因为窗口最大 3s
+        # 将样本堆叠
+        keys = ["pos_xy2", "pos_z2", "vel_xy2", "vel_z2",
+                "att_roll2", "att_pitch2", "omega2",
+                "u2", "dv2", "domega2", "du2",
+                "sat_hit", "over_hit"]
+        S = {k: np.array([e[k] for e in samples], dtype=float) for k in keys}
 
-        # 带权聚合
-        s = dict(pos_xy2=0.0, pos_z2=0.0, vel_xy2=0.0, vel_z2=0.0,
-                att_roll2=0.0, att_pitch2=0.0, omega2=0.0,
-                u2=0.0, dv2=0.0, domega2=0.0, du2=0.0,
-                sat_hits=0.0, over_hits=0.0)
-        W = 0.0
+        # RMSE或均值
+        rmse_pos_xy   = float(np.sqrt(np.mean(S["pos_xy2"])))
+        rmse_pos_z    = float(np.sqrt(np.mean(S["pos_z2"])))
+        rmse_vel_xy   = float(np.sqrt(np.mean(S["vel_xy2"])))
+        rmse_vel_z    = float(np.sqrt(np.mean(S["vel_z2"])))
+        rmse_att_roll = float(np.sqrt(np.mean(S["att_roll2"])))
+        rmse_att_pitch= float(np.sqrt(np.mean(S["att_pitch2"])))
+        rms_omega     = float(np.sqrt(np.mean(S["omega2"])))
 
-        for e in self.buf:
-            w = float(weight_for(now - e["t"]))
-            if w <= 0.0:
-                continue
-            W += w
-            s["pos_xy2"]  += w * e["pos_xy2"]
-            s["pos_z2"]   += w * e["pos_z2"]
-            s["vel_xy2"]  += w * e["vel_xy2"]
-            s["vel_z2"]   += w * e["vel_z2"]
-            s["att_roll2"]  += w * e["att_roll2"]
-            s["att_pitch2"] += w * e["att_pitch2"]
-            s["omega2"]   += w * e["omega2"]
-            s["u2"]       += w * e["u2"]
-            s["dv2"]      += w * e["dv2"]
-            s["domega2"]  += w * e["domega2"]
-            s["du2"]      += w * e["du2"]
-            s["sat_hits"] += w * e["sat_hit"]
-            s["over_hits"] += w * e["over_hit"]
+        mean_control_effort = float(np.mean(S["u2"]))
+        rms_dv      = float(np.sqrt(np.mean(S["dv2"])))
+        rms_domega  = float(np.sqrt(np.mean(S["domega2"])))
+        rms_du      = float(np.sqrt(np.mean(S["du2"])))
 
-        if W <= 1e-9:
-            return 0.0, {}
-
-        # 用总权重 W 做加权均值
-        rmse_pos_xy   = (s["pos_xy2"]  / W) ** 0.5
-        rmse_pos_z    = (s["pos_z2"]   / W) ** 0.5
-        rmse_vel_xy   = (s["vel_xy2"]  / W) ** 0.5
-        rmse_vel_z    = (s["vel_z2"]   / W) ** 0.5
-        rmse_att_roll = (s["att_roll2"]/ W) ** 0.5
-        rmse_att_pitch= (s["att_pitch2"]/W) ** 0.5
-        rms_omega     = (s["omega2"]   / W) ** 0.5
-
-        mean_control_effort = s["u2"] / W
-        rms_dv      = (s["dv2"]      / W) ** 0.5
-        rms_domega  = (s["domega2"]  / W) ** 0.5
-        rms_du      = (s["du2"]      / W) ** 0.5
-
-        rmse_pos_total = ((s["pos_xy2"] + s["pos_z2"]) / W) ** 0.5
-        rmse_vel_total = ((s["vel_xy2"] + s["vel_z2"]) / W) ** 0.5
+        # 计数：总和更接近“次数”
+        saturation_hits = float(np.sum(S["sat_hit"]))
+        overshoot_hits  = float(np.sum(S["over_hit"]))
 
         sw = self.segment_weights
         segment_reward = -(
@@ -680,33 +798,31 @@ class QuadcopterEnv(gym.Env):
             sw["W_dv"]     * rms_dv +
             sw["W_domega"] * rms_domega +
             sw["W_du"]     * rms_du +
-            sw["W_sat"]    * s["sat_hits"] +     # 注意：这里是加权计数
-            sw["W_over"]   * s["over_hits"]      # 同上
+            sw["W_sat"]    * saturation_hits +
+            sw["W_over"]   * overshoot_hits
         )
 
         metrics = {
-            'segment_duration': float(min(3.0, len(self.buf) * self.dt)),
-            'rmse_pos_xy': float(rmse_pos_xy),
-            'rmse_pos_z': float(rmse_pos_z),
-            'rmse_vel_xy': float(rmse_vel_xy),
-            'rmse_vel_z': float(rmse_vel_z),
-            'rmse_att_roll': float(rmse_att_roll),
-            'rmse_att_pitch': float(rmse_att_pitch),
-            'rms_omega': float(rms_omega),
-            'rmse_pos_total': float(rmse_pos_total),
-            'rmse_vel_total': float(rmse_vel_total),
-            'mean_control_effort': float(mean_control_effort),
-            'rms_dv': float(rms_dv),
-            'rms_domega': float(rms_domega),
-            'rms_du': float(rms_du),
-            'saturation_hits': float(s["sat_hits"]),  # 现在是加权“命中强度”
-            'overshoot_hits': float(s["over_hits"]),
+            'segment_duration': float(len(samples) * self.dt),
+            'rmse_pos_xy': rmse_pos_xy,
+            'rmse_pos_z': rmse_pos_z,
+            'rmse_vel_xy': rmse_vel_xy,
+            'rmse_vel_z': rmse_vel_z,
+            'rmse_att_roll': rmse_att_roll,
+            'rmse_att_pitch': rmse_att_pitch,
+            'rms_omega': rms_omega,
+            'mean_control_effort': mean_control_effort,
+            'rms_dv': rms_dv,
+            'rms_domega': rms_domega,
+            'rms_du': rms_du,
+            'saturation_hits': saturation_hits,
+            'overshoot_hits': overshoot_hits,
             'segment_reward': float(segment_reward),
-            'samples': int(len(self.buf)),
-            'weight_sum': float(W),
+            'samples': int(len(samples)),
         }
 
         return float(segment_reward), metrics
+
     # =========================
     # 终止与信息
     # =========================
@@ -733,11 +849,13 @@ class QuadcopterEnv(gym.Env):
             'angularvel_ref': self.traj.desPQR.copy(),
             'episode_reward': self.episode_reward,
             'time': self.time,
-            'segment_time_accum': float(len(self.buf) * self.dt),
             'position_error': pos_error,
         }
         if self.last_segment_metrics is not None:
             info['last_segment'] = self.last_segment_metrics
+            info['segment_time_accum'] = self.last_segment_metrics.get('segment_duration', 0.0)
+        else:
+            info['segment_time_accum'] = 0.0
         return info
 
     # =========================
@@ -774,9 +892,6 @@ class QuadcopterEnv(gym.Env):
         sDes = self.traj.desiredState(self.time, self.dt, self.quad)
         self.ctrl.controller(self.traj, self.quad, sDes, self.dt)
 
-        # 重置滑动窗口，避免阶段切换时历史统计干扰
-        self._reset_segment_window()
-
     # =========================
     # 渲染与关闭
     # =========================
@@ -788,11 +903,7 @@ class QuadcopterEnv(gym.Env):
         save_root: 保存目录
         csv_filename: CSV 文件名
         """
-        import os
-        import csv
         import numpy as np
-        from datetime import datetime
-        import matplotlib.pyplot as plt
 
         try:
             if mode == 'human':
@@ -816,7 +927,6 @@ class QuadcopterEnv(gym.Env):
             elif mode == 'data_log':
                 os.makedirs(save_root, exist_ok=True)
                 # 建立一个带时间戳的子目录，避免覆盖
-                from datetime import datetime
                 stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 ep_dir = os.path.join(save_root, f"episode_{stamp}")
                 os.makedirs(ep_dir, exist_ok=True)
@@ -862,7 +972,7 @@ class QuadcopterEnv(gym.Env):
                         continue
 
                     if arr.ndim == 0:
-                        arr = np.full((T, 1), float(arr))
+                        arr = arr.reshape(1, 1)
                     elif arr.ndim == 1:
                         arr = arr.reshape(-1, 1)
                     else:
@@ -912,3 +1022,5 @@ class QuadcopterEnv(gym.Env):
             plt.close(self.fig)
             self.fig = None
             self.ax = None
+        # 确保关闭 CSV
+        self._close_step_csv()

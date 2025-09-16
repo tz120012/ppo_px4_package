@@ -8,7 +8,7 @@ import argparse
 import datetime
 import os
 import pprint
-from typing import Optional, Tuple, Dict, Any
+from typing import Tuple
 
 import numpy as np
 import torch
@@ -38,25 +38,27 @@ def get_args() -> argparse.Namespace:
     
     # 环境相关参数
     parser.add_argument("--control-type", type=str, default="xyz_pos",
-                       choices=["xyz_pos", "xy_vel_z_pos", "xyz_vel"],
-                       help="Control mode for the quadcopter")
+                        choices=["xyz_pos", "xy_vel_z_pos", "xyz_vel"],
+                        help="Control mode for the quadcopter")
     parser.add_argument("--trajectory-type", type=int, default=5,
-                       help="Trajectory type (0-13)")
+                        help="Trajectory type (0-13)")
     parser.add_argument("--yaw-type", type=int, default=3,
-                       help="Yaw control type (0-4)")
+                        help="Yaw control type (0-4)")
     parser.add_argument("--max-episode-steps", type=int, default=2000,
-                       help="Maximum steps per episode")
+                        help="Maximum steps per episode")
     parser.add_argument("--rl-dt", type=float, default=1.0,
-                       help="RL decision timestep (seconds)")
+                        help="RL decision timestep (seconds)")
     parser.add_argument("--sim-dt", type=float, default=0.01,
-                       help="Simulation timestep (seconds)")
-    parser.add_argument("--segment-window", type=float, default=3.0,
-                       help="Sliding window length for reward calculation (seconds)")
+                        help="Simulation timestep (seconds)")
     parser.add_argument("--wind-type", type=str, default="None",
-                       help="Wind disturbance type")
+                        help="Wind disturbance type")
     parser.add_argument("--wind-strength", type=float, default=2.0,
-                       help="Wind strength")
-    
+                        help="Wind strength")
+    parser.add_argument("--dense-reward-scale", type=float, default=1.0,
+                        help="Scale factor for dense reward terms in environment")
+    parser.add_argument("--test-env-mode", action="store_true", default=False,               # 测试环境默认为False，记录step的info数据
+                        help="Enable single-env mode and write per-step info to CSV within env.step")
+
     # 训练参数
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--buffer-size", type=int, default=2048)
@@ -64,7 +66,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--epoch", type=int, default=50)
-    parser.add_argument("--step-per-epoch", type=int, default=20780)
+    parser.add_argument("--step-per-epoch", type=int, default=20480)
     parser.add_argument("--step-per-collect", type=int, default=2048)
     parser.add_argument("--repeat-per-collect", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=256)
@@ -73,13 +75,13 @@ def get_args() -> argparse.Namespace:
     
     # PPO特定参数
     parser.add_argument("--rew-norm", type=int, default=1,
-                       help="Reward normalization")
+                        help="Reward normalization")
     parser.add_argument("--vf-coef", type=float, default=0.5,
-                       help="Value function coefficient")
+                        help="Value function coefficient")
     parser.add_argument("--ent-coef", type=float, default=0.01,
-                       help="Entropy coefficient")
+                        help="Entropy coefficient")
     parser.add_argument("--gae-lambda", type=float, default=0.95,
-                       help="GAE lambda")
+                        help="GAE lambda")
     parser.add_argument("--bound-action-method", type=str, default="clip")
     parser.add_argument("--lr-decay", type=int, default=1)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
@@ -91,43 +93,23 @@ def get_args() -> argparse.Namespace:
     
     # 课程学习参数
     parser.add_argument("--use-curriculum", action="store_true", default=False,
-                       help="Enable curriculum learning")
+                        help="Enable curriculum learning")
     parser.add_argument("--curriculum-stages", type=int, default=5,
-                       help="Number of curriculum stages")
+                        help="Number of curriculum stages")
     parser.add_argument("--stage-threshold", type=float, default=0.75,
-                       help="Success rate threshold to advance stage")
+                        help="Success rate threshold to advance stage")
     
     # 日志和保存
     parser.add_argument("--logdir", type=str, default="log_px4")
     parser.add_argument("--render", type=float, default=0.0)
-    parser.add_argument("--save-interval", type=int, default=10,
-                       help="Save model every N epochs")
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda" if torch.cuda.is_available() else "cpu",
-    )
+    parser.add_argument("--save-interval", type=int, default=10, help="Save model every N epochs")
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resume-path", type=str, default=None)
     parser.add_argument("--resume-id", type=str, default=None)
-    parser.add_argument(
-        "--logger",
-        type=str,
-        default="tensorboard",
-        choices=["tensorboard", "wandb", "both"],
-    )
+    parser.add_argument("--logger", type=str, default="tensorboard", choices=["tensorboard", "wandb", "both"])
     parser.add_argument("--wandb-project", type=str, default="px4-pid-optimization")
-    parser.add_argument(
-        "--watch",
-        default=False,
-        action="store_true",
-        help="Watch the play of pre-trained policy only",
-    )
-    parser.add_argument(
-        "--save-video",
-        default=False,
-        action="store_true",
-        help="Save test episodes as video",
-    )
+    parser.add_argument("--watch", default=False, action="store_true", help="Watch the play of pre-trained policy only")
+    parser.add_argument("--save-video", default=False, action="store_true", help="Save test episodes as video")
     
     return parser.parse_args()
 
@@ -139,16 +121,17 @@ def make_px4_env(
     max_episode_steps: int,
     rl_dt: float,
     sim_dt: float,
-    segment_window: float,
+    dense_reward_scale: float,
     wind_type: str,
     wind_strength: float,
     seed: int,
     training_num: int,
     test_num: int,
+    test_env_mode: bool,
 ) -> Tuple:
     """创建PX4四旋翼环境"""
     
-    def make_env(seed_offset: int = 0):
+    def make_env(seed_offset: int = 0, enable_step_csv: bool = False):
         def _init():
             env = QuadcopterEnv(
                 control_type=control_type,
@@ -157,32 +140,39 @@ def make_px4_env(
                 max_episode_steps=max_episode_steps,
                 dt=sim_dt,
                 rl_dt=rl_dt,
-                segment_window=segment_window,
+                dense_reward_scale=dense_reward_scale,
                 wind_type=wind_type,
                 wind_strength=wind_strength,
                 render_mode=None,
+                test_env_mode=enable_step_csv,  # 仅在 test_env_mode 下启用写 CSV
             )
             env.reset(seed=seed + seed_offset)
             return env
         return _init
     
-    # 创建单个环境用于获取空间信息
-    env = make_env()()
-    
-    # 创建向量化训练环境
-    if training_num > 1:
-        train_envs = SubprocVectorEnv(
-            [make_env(i) for i in range(training_num)],
+    if test_env_mode:
+        # 单环境训练/测试，便于在 env.step 内写入 CSV
+        base_env = make_env(seed_offset=0, enable_step_csv=True)()
+        train_envs = DummyVectorEnv([lambda: base_env])  # 使用已创建的同一个 env
+        # 测试环境单独一个，以免在测试时复用训练 env 的内部 buffer
+        test_envs = DummyVectorEnv([make_env(seed_offset=1, enable_step_csv=True)])
+        env = base_env
+    else:
+        # 创建单个环境用于获取空间信息
+        env = make_env(seed_offset=0, enable_step_csv=False)()
+        # 创建向量化训练环境
+        if training_num > 1:
+            train_envs = SubprocVectorEnv(
+                [make_env(i, enable_step_csv=False) for i in range(training_num)],
+                share_memory=False
+            )
+        else:
+            train_envs = DummyVectorEnv([make_env(enable_step_csv=False)])
+        # 创建向量化测试环境
+        test_envs = SubprocVectorEnv(
+            [make_env(training_num + i, enable_step_csv=False) for i in range(test_num)],
             share_memory=False
         )
-    else:
-        train_envs = DummyVectorEnv([make_env()])
-    
-    # 创建向量化测试环境
-    test_envs = SubprocVectorEnv(
-        [make_env(training_num + i) for i in range(test_num)],
-        share_memory=False
-    )
     
     return env, train_envs, test_envs
 
@@ -208,7 +198,6 @@ class CurriculumManager:
     def should_advance(self, success_rate: float) -> bool:
         """判断是否应该进入下一阶段"""
         self.stage_performance.append(success_rate)
-        
         if success_rate >= self.threshold and self.current_stage < self.num_stages - 1:
             return True
         return False
@@ -239,12 +228,13 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         max_episode_steps=args.max_episode_steps,
         rl_dt=args.rl_dt,
         sim_dt=args.sim_dt,
-        segment_window=args.segment_window,
+        dense_reward_scale=args.dense_reward_scale,
         wind_type=args.wind_type,
         wind_strength=args.wind_strength,
         seed=args.seed,
         training_num=args.training_num,
         test_num=args.test_num,
+        test_env_mode=args.test_env_mode,
     )
     
     args.state_shape = env.observation_space.shape
@@ -345,7 +335,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         logger.info(f"Loaded agent from: {args.resume_path}")
     
     # 创建缓冲区
-    if args.training_num > 1:
+    if args.training_num > 1 and not args.test_env_mode:
         buffer = VectorReplayBuffer(args.buffer_size, len(train_envs))
     else:
         buffer = ReplayBuffer(args.buffer_size)
@@ -375,6 +365,9 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         logger_factory.logger_type = "wandb"
         logger_factory.wandb_project = args.wandb_project
     elif args.logger == "tensorboard":
+        logger_factory.logger_type = "tensorboard"
+    elif args.logger == "both":
+        # LoggerFactoryDefault 当前仅支持单一类型，这里简单地默认 tensorboard。
         logger_factory.logger_type = "tensorboard"
     
     exp_logger = logger_factory.create_logger(
@@ -420,19 +413,30 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
                 success_rate = min(1.0, max(0.0, (avg_reward + 500) / 1000))
                 
                 if curriculum_manager.should_advance(success_rate):
-                    new_config = curriculum_manager.advance_stage()
+                    _ = curriculum_manager.advance_stage()
                     logger.info(f"Advancing to curriculum stage {curriculum_manager.current_stage}")
-                    logger.info(f"New config: {new_config}")
+                    logger.info(f"New config: {curriculum_manager.get_current_config()}")
                     
-                    # 更新环境配置
-                    for env in train_envs:
-                        if hasattr(env, 'set_course_stage'):
-                            env.set_course_stage(curriculum_manager.current_stage)
+                    # 更新训练环境配置（假设 env wrapper 暴露了 set_course_stage）
+                    # 注意：VectorEnv 需要通过 envs 属性访问底层 env
+                    try:
+                        if hasattr(train_envs, "envs"):
+                            for e in train_envs.envs:
+                                if hasattr(e, 'set_course_stage'):
+                                    e.set_course_stage(curriculum_manager.current_stage)
+                        else:
+                            # DummyVectorEnv with lambda: base_env
+                            base = train_envs
+                            if hasattr(base, "envs"):
+                                for e in base.envs:
+                                    if hasattr(e, 'set_course_stage'):
+                                        e.set_course_stage(curriculum_manager.current_stage)
+                    except Exception as ex:
+                        logger.warning(f"Failed to update course stage on train envs: {ex}")
     
     def test_fn(epoch: int, env_step: int) -> None:
         """在每个测试后调用"""
         if epoch % args.save_interval == 0:
-            # 使用当前训练步数，而不是policy.gradient_step
             save_checkpoint_fn(epoch, env_step)
     
     if not args.watch:
@@ -444,7 +448,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             max_epoch=args.epoch,
             step_per_epoch=args.step_per_epoch,
             repeat_per_collect=args.repeat_per_collect,
-            episode_per_test=args.test_num,
+            episode_per_test=1 if args.test_env_mode else args.test_num,  # 单环境下每次仅测1个episode
             batch_size=args.batch_size,
             step_per_collect=args.step_per_collect,
             save_best_fn=save_best_fn,
@@ -475,7 +479,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         
         # 收集测试数据
         collector_stats = test_collector.collect(
-            n_episode=args.test_num,
+            n_episode=1 if args.test_env_mode else args.test_num,
             render=args.render
         )
         
@@ -491,8 +495,9 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
                 max_episode_steps=args.max_episode_steps,
                 dt=args.sim_dt,
                 rl_dt=args.rl_dt,
-                segment_window=args.segment_window,
+                dense_reward_scale=args.dense_reward_scale,
                 render_mode='data_log',
+                test_env_mode=args.test_env_mode,  # 如果也想记录 step CSV，可以设为 True
             )
             
             # 运行一个episode并保存数据
@@ -502,8 +507,10 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             episode_reward = 0.0
             
             while not (done or truncated):
-                action, _ = policy(obs[np.newaxis, :])
-                action = action.squeeze(0)
+                with torch.no_grad():
+                    obs_t = torch.as_tensor(obs, dtype=torch.float32, device=args.device).unsqueeze(0)
+                    act, _ = policy(obs_t)
+                    action = act.squeeze(0).cpu().numpy()
                 obs, reward, done, truncated, info = render_env.step(action)
                 episode_reward += reward
             
