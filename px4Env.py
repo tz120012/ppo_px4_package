@@ -80,32 +80,32 @@ class QuadcopterEnv(gym.Env):
 
         # 奖励权重（即时）
         self.reward_weights = dict(
-            w_pos_xy=0.8,
-            w_pos_z=1.2,
-            w_vel_xy=0.10,
-            w_vel_z=0.12,
-            w_att=0.15,
-            w_omega=0.05,
+            w_pos_xy=0.3,
+            w_pos_z=0.25,
+            w_vel_xy=0.15,
+            w_vel_z=0.1,
+            w_att=0.1,
+            w_omega=0.02,
         )
 
         # Segment 权重（本步内样本的RMSE/均值聚合）
         self.segment_weights = dict(
-            W_pos_xy=4.0,
-            W_pos_z=6.0,
-            W_vel_xy=1.0,
-            W_vel_z=1.2,
-            W_att_roll=1.2,
-            W_att_pitch=1.2,
-            W_omega=0.6,
+            W_pos_xy=0.3,
+            W_pos_z=0.25,
+            W_vel_xy=0.15,
+            W_vel_z=0.1,
+            W_att_roll=0.1,
+            W_att_pitch=0.1,
+            W_omega=0.02,
 
-            # 可按需开启
-            W_u=0.0,
-            W_dv=0.0,
-            W_domega=0.0,
-            W_du=0.0,
+            # 暂时不开启平滑性奖励
+            W_u=0.0,            # 0.05
+            W_dv=0.0,           # 0.06
+            W_domega=0.0,       # 0.07
+            W_du=0.0,           # 0.08
 
-            W_sat=3.0,
-            W_over=1.5
+            W_sat=0.15,
+            W_over=0.15
         )
 
         # 限制与判据
@@ -117,7 +117,7 @@ class QuadcopterEnv(gym.Env):
         )
 
         # 失败惩罚
-        self.failure_penalty = -1500.0  # 非正常截断的惩罚
+        self.failure_penalty = -100.0  # 非正常截断的惩罚
 
         # 回合跟踪（以RL步为单位）
         self.current_step = 0
@@ -783,7 +783,9 @@ class QuadcopterEnv(gym.Env):
 
         # 计数：总和更接近“次数”
         saturation_hits = float(np.sum(S["sat_hit"]))
+        saturation_hits_norm = saturation_hits / 100    # 归一化，避免过大影响
         overshoot_hits  = float(np.sum(S["over_hit"]))
+        overshoot_hits_norm = overshoot_hits / 100      # 归一化，避免过大影响
 
         sw = self.segment_weights
         segment_reward = -(
@@ -798,8 +800,8 @@ class QuadcopterEnv(gym.Env):
             sw["W_dv"]     * rms_dv +
             sw["W_domega"] * rms_domega +
             sw["W_du"]     * rms_du +
-            sw["W_sat"]    * saturation_hits +
-            sw["W_over"]   * overshoot_hits
+            sw["W_sat"]    * saturation_hits_norm +
+            sw["W_over"]   * overshoot_hits_norm    
         )
 
         metrics = {

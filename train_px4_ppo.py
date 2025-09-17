@@ -54,9 +54,9 @@ def get_args() -> argparse.Namespace:
                         help="Wind disturbance type")
     parser.add_argument("--wind-strength", type=float, default=2.0,
                         help="Wind strength")
-    parser.add_argument("--dense-reward-scale", type=float, default=1.0,
+    parser.add_argument("--dense-reward-scale", type=float, default=0.1,                    # 即时奖励系数默认为0.1
                         help="Scale factor for dense reward terms in environment")
-    parser.add_argument("--test-env-mode", action="store_true", default=False,               # 测试环境默认为False，记录step的info数据
+    parser.add_argument("--test-env-mode", action="store_true", default=False,              # 测试环境默认为False，记录step的info数据
                         help="Enable single-env mode and write per-step info to CSV within env.step")
 
     # 训练参数
