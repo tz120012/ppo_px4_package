@@ -38,8 +38,8 @@ class QuadcopterEnv(gym.Env):
                  trajectory_type: int = 5,
                  yaw_type: int = 3,
                  max_episode_steps: int = 2000,     # 每个回合的最大步数（以RL步计）
-                 dt: float = 0.01,                  # 仿真积分时间步长（动力学/控制）
-                 rl_dt: float = 1,                  # RL决策时间步长（每次step保持action的时长）
+                 dt: float = 0.005,                  # 仿真积分时间步长（动力学/控制）
+                 rl_dt: float = 0.05,                  # RL决策时间步长（每次step保持action的时长）
                  target_pos: Optional[np.ndarray] = None,
                  dense_reward_scale: float = 1.0,   # 即时奖励权重缩放
                  wind_type: str = 'None',
@@ -117,7 +117,7 @@ class QuadcopterEnv(gym.Env):
         )
 
         # 失败惩罚
-        self.failure_penalty = -100.0  # 非正常截断的惩罚
+        self.failure_penalty = -10.0  # 非正常截断的惩罚
 
         # 回合跟踪（以RL步为单位）
         self.current_step = 0
@@ -258,7 +258,6 @@ class QuadcopterEnv(gym.Env):
             ]
             self._csv_writer.writerow(header)
             self._csv_header_written = True
-            log.info(f"[step-csv] Write to {self._csv_path}")
         except Exception as e:
             log.error(f"[step-csv] Open CSV failed: {e}")
             self._csv_fh = None

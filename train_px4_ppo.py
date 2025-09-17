@@ -28,11 +28,6 @@ from tianshou.utils.net.continuous import ActorProb, Critic
 # 导入你的四旋翼环境
 from px4Env import QuadcopterEnv
 
-import logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PPO for PX4 Quadcopter PID Optimization")
     
@@ -46,9 +41,9 @@ def get_args() -> argparse.Namespace:
                         help="Yaw control type (0-4)")
     parser.add_argument("--max-episode-steps", type=int, default=2000,
                         help="Maximum steps per episode")
-    parser.add_argument("--rl-dt", type=float, default=1.0,
+    parser.add_argument("--rl-dt", type=float, default=0.05,
                         help="RL decision timestep (seconds)")
-    parser.add_argument("--sim-dt", type=float, default=0.01,
+    parser.add_argument("--sim-dt", type=float, default=0.005,
                         help="Simulation timestep (seconds)")
     parser.add_argument("--wind-type", type=str, default="None",
                         help="Wind disturbance type")
@@ -65,13 +60,13 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--epoch", type=int, default=50)
-    parser.add_argument("--step-per-epoch", type=int, default=20480)
-    parser.add_argument("--step-per-collect", type=int, default=2048)
+    parser.add_argument("--epoch", type=int, default=100)
+    parser.add_argument("--step-per-epoch", type=int, default=16384)
+    parser.add_argument("--step-per-collect", type=int, default=4096)
     parser.add_argument("--repeat-per-collect", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--training-num", type=int, default=4)
-    parser.add_argument("--test-num", type=int, default=4)
+    parser.add_argument("--training-num", type=int, default=8)
+    parser.add_argument("--test-num", type=int, default=8)
     
     # PPO特定参数
     parser.add_argument("--rew-norm", type=int, default=1,
@@ -242,9 +237,9 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
     args.max_action = env.action_space.high[0]
     args.min_action = env.action_space.low[0]
     
-    logger.info(f"Observations shape: {args.state_shape}")
-    logger.info(f"Actions shape: {args.action_shape}")
-    logger.info(f"Action range: [{args.min_action}, {args.max_action}]")
+    print(f"Observations shape: {args.state_shape}")
+    print(f"Actions shape: {args.action_shape}")
+    print(f"Action range: [{args.min_action}, {args.max_action}]")
     
     # 设置随机种子
     np.random.seed(args.seed)
@@ -332,7 +327,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
     if args.resume_path:
         ckpt = torch.load(args.resume_path, map_location=args.device)
         policy.load_state_dict(ckpt["model"])
-        logger.info(f"Loaded agent from: {args.resume_path}")
+        print.info(f"Loaded agent from: {args.resume_path}")
     
     # 创建缓冲区
     if args.training_num > 1 and not args.test_env_mode:
@@ -351,7 +346,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             num_stages=args.curriculum_stages,
             threshold=args.stage_threshold
         )
-        logger.info("Curriculum learning enabled")
+        print("Curriculum learning enabled")
     
     # 设置日志
     now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
@@ -385,8 +380,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             "curriculum_stage": curriculum_manager.current_stage if curriculum_manager else 0,
         }
         torch.save(state, os.path.join(log_path, "best_policy.pth"))
-        logger.info(f"Best policy saved to {log_path}/best_policy.pth")
-    
+   
     # 保存检查点函数
     def save_checkpoint_fn(epoch: int, env_step: int) -> None:
         if epoch % args.save_interval == 0:
@@ -400,7 +394,6 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
                 "curriculum_stage": curriculum_manager.current_stage if curriculum_manager else 0,
             }
             torch.save(state, ckpt_path)
-            logger.info(f"Checkpoint saved to {ckpt_path}")
     
     # 自定义训练函数（用于课程学习）
     def train_fn(epoch: int, env_step: int) -> None:
@@ -414,8 +407,6 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
                 
                 if curriculum_manager.should_advance(success_rate):
                     _ = curriculum_manager.advance_stage()
-                    logger.info(f"Advancing to curriculum stage {curriculum_manager.current_stage}")
-                    logger.info(f"New config: {curriculum_manager.get_current_config()}")
                     
                     # 更新训练环境配置（假设 env wrapper 暴露了 set_course_stage）
                     # 注意：VectorEnv 需要通过 envs 属性访问底层 env
@@ -432,7 +423,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
                                     if hasattr(e, 'set_course_stage'):
                                         e.set_course_stage(curriculum_manager.current_stage)
                     except Exception as ex:
-                        logger.warning(f"Failed to update course stage on train envs: {ex}")
+                        print(f"Failed to update course stage on train envs: {ex}")
     
     def test_fn(epoch: int, env_step: int) -> None:
         """在每个测试后调用"""
@@ -456,6 +447,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             test_in_train=False,
             train_fn=train_fn if curriculum_manager else None,
             test_fn=test_fn,
+            verbose=False,
         )
         
         result = trainer.run()
@@ -469,11 +461,9 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             "result": result,
         }
         torch.save(state, final_path)
-        logger.info(f"Final policy saved to {final_path}")
     
     # 观看训练好的策略表现
     if args.watch:
-        logger.info("Testing trained policy...")
         test_envs.seed(args.seed)
         test_collector.reset()
         
@@ -482,9 +472,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             n_episode=1 if args.test_env_mode else args.test_num,
             render=args.render
         )
-        
-        logger.info(f"Test results: {collector_stats}")
-        
+                
         # 如果需要保存视频或数据
         if args.save_video:
             # 创建一个带渲染的环境
@@ -516,7 +504,6 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             
             # 渲染数据到文件
             render_env.render(mode='data_log', save_root=log_path)
-            logger.info(f"Episode data saved. Total reward: {episode_reward}")
             
             render_env.close()
 

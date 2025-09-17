@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-# python plot_csv.py --csv path/to/your.csv --outdir plots --smooth 0 --skip-constant
-
+# python plot_csv.py --csv ./log_step_metrics/episode_20250917-201122/step_metrics.csv  --outdir plots --smooth 0 --skip-constant
 import argparse
 import os
 import sys
