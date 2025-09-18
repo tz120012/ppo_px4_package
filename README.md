@@ -253,15 +253,14 @@ python train_px4_ppo.py \
     /home/ai/miniconda3/envs/tianshou_env/bin/python /home/ai/package/ppo_px4_package/train_px4_ppo.py
 
 尝试：
-    考虑把 ent_coef 从 0.01 稍增到 0.02，或对后期阶段动态调高一点，促进探索，防止过早收敛在次优解。
+  ->考虑把 ent_coef 从 0.01 稍增到 0.02，或对后期阶段动态调高一点，促进探索，防止过早收敛在次优解。
     python /home/ai/package/ppo_px4_package/train_px4_ppo.py --ent-coef=0.02
+  ->考虑把
 
 
 
 测试：初始化一个train环境用于测试奖励构成和权重是否合适
     python train_px4_ppo.py --test-env-mode
 
-观看模式：会绘制状态图片，或者动态plot状态
-    python train_px4_ppo.py --watch --resume-path=./log_px4/px4_quad/ppo/0/250918-196267/best_policy.pth
-
-    python train_px4_ppo.py --watch --resume-path=./log_px4/px4_quad/ppo/0/250918-196267/best_policy.pth --render=0.01
+观看模式：绘制状态图片，或者动态plot状态
+    python train_px4_ppo.py --watch --resume-path=./log_px4/px4_quad/ppo/0/250918-196267/best_policy.pth --render=0.02

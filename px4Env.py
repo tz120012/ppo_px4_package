@@ -1243,8 +1243,8 @@ class QuadcopterEnv(gym.Env):
             self._lines["pos"]["fb"][i].set_data(t,  pos_fb_arr[:, i])
             self._lines["vel"]["ref"][i].set_data(t, vel_ref_arr[:, i])
             self._lines["vel"]["fb"][i].set_data(t,  vel_fb_arr[:, i])
-            self._lines["eul"]["ref"][i].set_data(t, eul_ref_arr[:, i])
-            self._lines["eul"]["fb"][i].set_data(t,  eul_fb_arr[:, i])
+            self._lines["eul"]["ref"][i].set_data(t, eul_ref_arr_unw[:, i])
+            self._lines["eul"]["fb"][i].set_data(t,  eul_fb_arr_unw[:, i])
             self._lines["omg"]["ref"][i].set_data(t, omg_ref_arr[:, i])
             self._lines["omg"]["fb"][i].set_data(t,  omg_fb_arr[:, i])
 
