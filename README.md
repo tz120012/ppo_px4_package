@@ -243,8 +243,6 @@ python train_px4_ppo.py \
 
 
 
-
-
 ## 运行示例
 
 默认命令：
@@ -264,3 +262,19 @@ python train_px4_ppo.py \
 
 观看模式：绘制状态图片，或者动态plot状态
     python train_px4_ppo.py --watch --resume-path=./log_px4/px4_quad/ppo/0/250918-196267/best_policy.pth --render=0.02
+
+
+
+
+## 分支功能
+v1.1.0 完成基本的 tianshou（ppo）+ PX4 架构的PID自适应控制器实现航迹跟踪飞行。
+v1.2.0 实现远距离waypoint，和高速 的航迹跟随，改进角速率跟踪性能
+      最大允许速度：
+          ->x,y分轴最大速度：5->15
+          ->z分轴速度：5
+          ->总速度：5->20
+      航点：x,y,z放大10倍
+      平均速度：1.6m/s -> 8m/s
+
+v2.1.0 基于tianshou(ppo) + PX4 + Gazebo 实现模拟在线强化学习功能；
+v2.2.0 基于tianshou(ppo) + PX4 + Gazebo 实现手动控制测试，航线跟踪飞行测试

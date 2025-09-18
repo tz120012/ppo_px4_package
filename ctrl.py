@@ -26,63 +26,27 @@ class Control:
     
     def __init__(self, quad, yawType):
         # Set PID Gains and Max Values
-
-        # Position P gains
-        # Py    = 1.0
-        # Px    = Py
-        # Pz    = 1.0
-
         self.pos_P_gain = np.array([1.0, 1.0, 0.8])
-
-        # Velocity P-D gains
-        # Pxdot = 5.0
-        # Dxdot = 0.5
-        # Ixdot = 5.0
-
-        # Pydot = Pxdot
-        # Dydot = Dxdot
-        # Iydot = Ixdot
-
-        # Pzdot = 4.0
-        # Dzdot = 0.5
-        # Izdot = 5.0
 
         self.vel_P_gain = np.array([3.1, 3.1, 8.5])
         self.vel_I_gain = np.array([30, 30, 1.6])
         self.vel_D_gain = np.array([1.05, 1.05, 1.0])
 
         # Attitude P gains
-        Pphi = 8.0
-        Ptheta = Pphi
-        Ppsi = 1.5
         self.PpsiStrong = 8
-
         self.att_P_gain = np.array([6.25, 6.25, 2.75])
-
-        # Rate P-D gains
-        # Pp = 1.5
-        # Ip = 0.1
-        # Dp = 0.04
-
-        # Pq = Pp
-        # Iq = Ip
-        # Dq = Dp 
-
-        # Pr = 1.0
-        # Ir = 0.1
-        # Dr = 0.1
 
         self.rate_P_gain = np.array([0.255, 0.305, 0.305])
         self.rate_I_gain = np.array([5.0, 5.0, 5.0])
         self.rate_D_gain = np.array([0.005, 0.005, 0.005])
 
         # Max Velocities
-        uMax = 5.0
-        vMax = 5.0
+        uMax = 15.0
+        vMax = 15.0
         wMax = 5.0
 
         self.velMax = np.array([uMax, vMax, wMax])
-        self.velMaxAll = 5.0
+        self.velMaxAll = 20.0
 
         self.saturateVel_separetely = False
 

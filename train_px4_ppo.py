@@ -74,7 +74,7 @@ def get_args() -> argparse.Namespace:
                         help="Reward normalization")
     parser.add_argument("--vf-coef", type=float, default=0.5,
                         help="Value function coefficient")
-    parser.add_argument("--ent-coef", type=float, default=0.01,             
+    parser.add_argument("--ent-coef", type=float, default=0.02,             
                         help="Entropy coefficient")
     parser.add_argument("--gae-lambda", type=float, default=0.95,
                         help="GAE lambda")
@@ -133,7 +133,7 @@ def make_px4_env(
                 control_type=control_type,
                 trajectory_type=trajectory_type,
                 yaw_type=yaw_type,
-                max_episode_steps=500 if (watch) else max_episode_steps,
+                max_episode_steps=1000 if (watch) else max_episode_steps,
                 dt=sim_dt,
                 rl_dt=rl_dt,
                 dense_reward_scale=dense_reward_scale,

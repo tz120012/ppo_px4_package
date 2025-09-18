@@ -955,89 +955,6 @@ class QuadcopterEnv(gym.Env):
     # =========================
     # 渲染与关闭
     # =========================
-
-    # self.render_data = [obs, action, reward]
-    # def _update_figure_from_render_data(self):
-    #     rd = getattr(self, "render_data", None)
-    #     if rd is None:
-    #         return False
-
-    #     # 解析 rd: 8 段各 3 维，共 24 长度
-    #     try:
-    #         pos_ref = rd[0:3];   vel_ref = rd[3:6];   eul_ref = rd[6:9];   omg_ref = rd[9:12]
-    #         pos_fb  = rd[12:15]; vel_fb  = rd[15:18]; eul_fb  = rd[18:21]; omg_fb  = rd[21:24]
-    #     except Exception:
-    #         return False
-
-    #     # 确保已初始化 figure/axes/lines
-    #     if not getattr(self, "_render_inited", False):
-    #         import matplotlib.pyplot as plt
-    #         plt.ion() if self.render_mode == "human" else plt.ioff()
-    #         self._fig, self._axs = plt.subplots(4, 1, figsize=(10, 12), constrained_layout=True)
-    #         self._lines = {"pos": {"ref": [], "fb": []},
-    #                     "vel": {"ref": [], "fb": []},
-    #                     "eul": {"ref": [], "fb": []},
-    #                     "omg": {"ref": [], "fb": []}}
-    #         self._t_hist = []
-    #         self._pos_ref_hist, self._pos_fb_hist = [], []
-    #         self._vel_ref_hist, self._vel_fb_hist = [], []
-    #         self._eul_ref_hist, self._eul_fb_hist = [], []
-    #         self._omg_ref_hist, self._omg_fb_hist = [], []
-
-    #         self._axs[0].set_title("Position (x,y,z)");      self._axs[0].set_ylabel("pos [m]")
-    #         self._axs[1].set_title("Velocity (vx,vy,vz)");   self._axs[1].set_ylabel("vel [m/s]")
-    #         self._axs[2].set_title("Euler (roll,pitch,yaw) [rad]"); self._axs[2].set_ylabel("angle [rad]")
-    #         self._axs[3].set_title("Body rates (wx,wy,wz) [rad/s]"); self._axs[3].set_ylabel("rate [rad/s]")
-    #         self._axs[3].set_xlabel("Step")
-    #         colors = ["tab:blue", "tab:orange", "tab:green"]
-    #         for k, ax in zip(["pos", "vel", "eul", "omg"], self._axs):
-    #             for i in range(3):
-    #                 (lref,) = ax.plot([], [], linestyle="--", color=colors[i], alpha=0.8, label=f"{k}[{i}]_ref")
-    #                 (lfb,)  = ax.plot([], [], linestyle="-",  color=colors[i], alpha=0.9, label=f"{k}[{i}]_fb")
-    #                 self._lines[k]["ref"].append(lref)
-    #                 self._lines[k]["fb"].append(lfb)
-    #             ax.grid(True, alpha=0.3)
-    #             ax.legend(ncols=3, fontsize=8, loc="upper right")
-    #         self._render_inited = True
-
-    #     # 追加历史
-    #     step_idx = self._t_hist[-1] + 1 if self._t_hist else 0
-    #     self._t_hist.append(step_idx)
-    #     self._pos_ref_hist.append(pos_ref); self._pos_fb_hist.append(pos_fb)
-    #     self._vel_ref_hist.append(vel_ref); self._vel_fb_hist.append(vel_fb)
-    #     self._eul_ref_hist.append(eul_ref); self._eul_fb_hist.append(eul_fb)
-    #     self._omg_ref_hist.append(omg_ref); self._omg_fb_hist.append(omg_fb)
-
-    #     # 数组化
-    #     def to_arr(lst):
-    #         arr = np.asarray(lst)
-    #         if arr.ndim == 1:
-    #             arr = arr.reshape(1, -1)
-    #         return arr
-    #     t = np.asarray(self._t_hist)
-    #     pos_ref_arr = to_arr(self._pos_ref_hist); pos_fb_arr = to_arr(self._pos_fb_hist)
-    #     vel_ref_arr = to_arr(self._vel_ref_hist); vel_fb_arr = to_arr(self._vel_fb_hist)
-    #     eul_ref_arr = to_arr(self._eul_ref_hist); eul_fb_arr = to_arr(self._eul_fb_hist)
-    #     omg_ref_arr = to_arr(self._omg_ref_hist); omg_fb_arr = to_arr(self._omg_fb_hist)
-
-    #     # 更新线条
-    #     for i in range(3):
-    #         self._lines["pos"]["ref"][i].set_data(t, pos_ref_arr[:, i])
-    #         self._lines["pos"]["fb"][i].set_data(t,  pos_fb_arr[:, i])
-    #         self._lines["vel"]["ref"][i].set_data(t, vel_ref_arr[:, i])
-    #         self._lines["vel"]["fb"][i].set_data(t,  vel_fb_arr[:, i])
-    #         self._lines["eul"]["ref"][i].set_data(t, eul_ref_arr[:, i])
-    #         self._lines["eul"]["fb"][i].set_data(t,  eul_fb_arr[:, i])
-    #         self._lines["omg"]["ref"][i].set_data(t, omg_ref_arr[:, i])
-    #         self._lines["omg"]["fb"][i].set_data(t,  omg_fb_arr[:, i])
-
-    #     # 重新缩放
-    #     for ax in self._axs:
-    #         ax.relim()
-    #         ax.autoscale_view(True, True, True)
-
-    #     return True
-
     def _update_figure_from_render_data(self):
         rd = getattr(self, "render_data", None)
         if rd is None:
@@ -1065,12 +982,13 @@ class QuadcopterEnv(gym.Env):
         act1d = as1d(action)
         rew_val = None if reward is None else float(np.asarray(reward).reshape(()))
 
-        if not getattr(self, "_debug_once", False):
-            print("[render init] act1d:",
-                None if act1d is None else (type(act1d), getattr(act1d, "shape", None), act1d[:5]),
-                "rew_val:", rew_val)
-            print("[render init] rd type:", type(getattr(self, "render_data", None)))
-            self._debug_once = True
+        # #检查 action 和 reward 是否为None
+        # if not getattr(self, "_debug_once", False):
+        #     print("[render init] act1d:",
+        #         None if act1d is None else (type(act1d), getattr(act1d, "shape", None), act1d[:5]),
+        #         "rew_val:", rew_val)
+        #     print("[render init] rd type:", type(getattr(self, "render_data", None)))
+        #     self._debug_once = True
 
         # ---------- 2) 从 obs 中取出 8 组 3D ----------
         def take3(x):
@@ -1263,45 +1181,7 @@ class QuadcopterEnv(gym.Env):
             ax.autoscale_view(True, True, True)
 
         return True
-    
-    # def render(self):
-    #     if getattr(self, "render_mode", None) is None:
-    #         return None
 
-    #     if self.render_mode == "human":
-    #         updated = self._update_figure_from_render_data()
-    #         if updated:
-    #             self._fig.canvas.draw()
-    #             self._fig.canvas.flush_events()
-    #         return None
-
-    #     if self.render_mode == "rgb_array":
-    #         # 先更新
-    #         self._update_figure_from_render_data()
-
-    #         # 截图
-    #         canvas = FigureCanvasAgg(self._fig)
-    #         canvas.draw()  # 关键：确保缓冲区是最新的
-    #         buf = np.frombuffer(canvas.buffer_rgba(), dtype=np.uint8)
-    #         w, h = self._fig.canvas.get_width_height()
-    #         img = buf.reshape((h, w, 4))[..., :3]
-
-    #         # 保存
-    #         save_frames = getattr(self, "save_frames", True)
-    #         save_dir = getattr(self, "save_dir", "./log_render_frames")
-    #         save_overwrite = getattr(self, "save_overwrite", True)
-    #         # dpi = getattr(self, "save_dpi", None)  # 不用于 imageio，保留给 savefig 用
-    #         if save_frames:
-    #             os.makedirs(save_dir, exist_ok=True)
-    #             if save_overwrite:
-    #                 out_path = os.path.join(save_dir, "frame.png")
-    #             else:
-    #                 idx = getattr(self, "_frame_idx", 0)
-    #                 out_path = os.path.join(save_dir, f"frame_{idx:06d}.png")
-    #                 self._frame_idx = idx + 1
-    #             imageio.imwrite(out_path, img)
-
-    #         return img
 
     def render(self):
         mode = getattr(self, "render_mode", None)
@@ -1310,8 +1190,7 @@ class QuadcopterEnv(gym.Env):
 
         updated = self._update_figure_from_render_data()
         if not updated:
-            # 可选：调试日志，帮助定位为何 update 失败
-            # print("[render] update=False (render_data incomplete or invalid)")
+            print("[render] update=False (render_data incomplete or invalid)")
             return None
 
         if mode == "human":
@@ -1351,8 +1230,6 @@ class QuadcopterEnv(gym.Env):
                     out_path = os.path.join(save_dir, f"frame_{idx:06d}.png")
                     self._frame_idx = idx + 1
                 imageio.imwrite(out_path, img)
-                # 可选：打印路径，便于确认
-                # print(f"[render] saved {out_path}, img={img.shape} {img.dtype}")
 
             return img
 
