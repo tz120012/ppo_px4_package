@@ -56,14 +56,14 @@ def get_args() -> argparse.Namespace:
 
     # 训练参数
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--buffer-size", type=int, default=2048)
+    parser.add_argument("--buffer-size", type=int, default=4096)
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--epoch", type=int, default=100)
     parser.add_argument("--step-per-epoch", type=int, default=16384)
     parser.add_argument("--step-per-collect", type=int, default=4096)
-    parser.add_argument("--repeat-per-collect", type=int, default=10)
+    parser.add_argument("--repeat-per-collect", type=int, default=6)        # 每次收集后重复更新6次，10次就太稳了
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--training-num", type=int, default=8)
     parser.add_argument("--test-num", type=int, default=8)
@@ -73,7 +73,7 @@ def get_args() -> argparse.Namespace:
                         help="Reward normalization")
     parser.add_argument("--vf-coef", type=float, default=0.5,
                         help="Value function coefficient")
-    parser.add_argument("--ent-coef", type=float, default=0.01,
+    parser.add_argument("--ent-coef", type=float, default=0.01,             
                         help="Entropy coefficient")
     parser.add_argument("--gae-lambda", type=float, default=0.95,
                         help="GAE lambda")
@@ -322,12 +322,13 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         advantage_normalization=args.norm_adv,
         recompute_advantage=args.recompute_adv,
     )
-    
+
+    #############################################################################################
     # 加载之前的策略
     if args.resume_path:
-        ckpt = torch.load(args.resume_path, map_location=args.device)
+        ckpt = torch.load(args.resume_path, map_location=args.device, weights_only=False)
         policy.load_state_dict(ckpt["model"])
-        print.info(f"Loaded agent from: {args.resume_path}")
+        print(f"Loaded agent from: {args.resume_path}")
     
     # 创建缓冲区
     if args.training_num > 1 and not args.test_env_mode:
@@ -338,16 +339,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
     # 创建收集器
     train_collector = Collector[CollectStats](policy,train_envs,buffer,exploration_noise=True)
     test_collector = Collector[CollectStats](policy,test_envs)
-    
-    # 课程学习管理器
-    curriculum_manager = None
-    if args.use_curriculum:
-        curriculum_manager = CurriculumManager(
-            num_stages=args.curriculum_stages,
-            threshold=args.stage_threshold
-        )
-        print("Curriculum learning enabled")
-    
+
     # 设置日志
     now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
     args.algo_name = "ppo"
@@ -369,32 +361,18 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         log_dir=log_path,
         experiment_name=log_name,
         run_id=args.resume_id,
-        config_dict=vars(args),
+        config_dict=vars(args),     # Tensorboard/W&B 记录所有超参配置，便于复现
     )
     
-    # 保存最佳策略函数
-    def save_best_fn(policy: BasePolicy) -> None:
-        state = {
-            "model": policy.state_dict(),
-            "args": vars(args),
-            "curriculum_stage": curriculum_manager.current_stage if curriculum_manager else 0,
-        }
-        torch.save(state, os.path.join(log_path, "best_policy.pth"))
-   
-    # 保存检查点函数
-    def save_checkpoint_fn(epoch: int, env_step: int) -> None:
-        if epoch % args.save_interval == 0:
-            ckpt_path = os.path.join(log_path, f"checkpoint_epoch_{epoch}.pth")
-            state = {
-                "model": policy.state_dict(),
-                "optim": optim.state_dict(),
-                "args": vars(args),
-                "epoch": epoch,
-                "env_step": env_step,
-                "curriculum_stage": curriculum_manager.current_stage if curriculum_manager else 0,
-            }
-            torch.save(state, ckpt_path)
-    
+    # 课程学习管理器
+    curriculum_manager = None
+    if args.use_curriculum:
+        curriculum_manager = CurriculumManager(
+            num_stages=args.curriculum_stages,
+            threshold=args.stage_threshold
+        )
+        print("Curriculum learning enabled")
+      
     # 自定义训练函数（用于课程学习）
     def train_fn(epoch: int, env_step: int) -> None:
         """在每个epoch开始时调用"""
@@ -424,12 +402,17 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
                                         e.set_course_stage(curriculum_manager.current_stage)
                     except Exception as ex:
                         print(f"Failed to update course stage on train envs: {ex}")
-    
-    def test_fn(epoch: int, env_step: int) -> None:
-        """在每个测试后调用"""
-        if epoch % args.save_interval == 0:
-            save_checkpoint_fn(epoch, env_step)
-    
+
+    # 保存最佳策略函数
+    def save_best_fn(policy: BasePolicy) -> None:
+        state = {
+            "model": policy.state_dict(),
+            "args": vars(args),
+            "curriculum_stage": curriculum_manager.current_stage if curriculum_manager else 0,
+        }
+        torch.save(state, os.path.join(log_path, "best_policy.pth"))
+
+
     if not args.watch:
         # 训练器
         trainer = OnpolicyTrainer(
@@ -444,9 +427,8 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             step_per_collect=args.step_per_collect,
             save_best_fn=save_best_fn,
             logger=exp_logger,
-            test_in_train=False,
+            test_in_train=True,
             train_fn=train_fn if curriculum_manager else None,
-            test_fn=test_fn,
             verbose=False,
         )
         
@@ -462,50 +444,6 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         }
         torch.save(state, final_path)
     
-    # 观看训练好的策略表现
-    if args.watch:
-        test_envs.seed(args.seed)
-        test_collector.reset()
-        
-        # 收集测试数据
-        collector_stats = test_collector.collect(
-            n_episode=1 if args.test_env_mode else args.test_num,
-            render=args.render
-        )
-                
-        # 如果需要保存视频或数据
-        if args.save_video:
-            # 创建一个带渲染的环境
-            render_env = QuadcopterEnv(
-                control_type=args.control_type,
-                trajectory_type=args.trajectory_type,
-                yaw_type=args.yaw_type,
-                max_episode_steps=args.max_episode_steps,
-                dt=args.sim_dt,
-                rl_dt=args.rl_dt,
-                dense_reward_scale=args.dense_reward_scale,
-                render_mode='data_log',
-                test_env_mode=args.test_env_mode,  # 如果也想记录 step CSV，可以设为 True
-            )
-            
-            # 运行一个episode并保存数据
-            obs, info = render_env.reset()
-            done = False
-            truncated = False
-            episode_reward = 0.0
-            
-            while not (done or truncated):
-                with torch.no_grad():
-                    obs_t = torch.as_tensor(obs, dtype=torch.float32, device=args.device).unsqueeze(0)
-                    act, _ = policy(obs_t)
-                    action = act.squeeze(0).cpu().numpy()
-                obs, reward, done, truncated, info = render_env.step(action)
-                episode_reward += reward
-            
-            # 渲染数据到文件
-            render_env.render(mode='data_log', save_root=log_path)
-            
-            render_env.close()
 
 
 if __name__ == "__main__":
