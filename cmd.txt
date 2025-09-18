@@ -1,0 +1,14 @@
+默认命令：
+    python /home/ai/package/ppo_px4_package/train_px4_ppo.py  
+    或者
+    /home/ai/miniconda3/envs/tianshou_env/bin/python /home/ai/package/ppo_px4_package/train_px4_ppo.py
+
+尝试：
+    考虑把 ent_coef 从 0.01 稍增到 0.02，或对后期阶段动态调高一点，促进探索，防止过早收敛在次优解。
+    python /home/ai/package/ppo_px4_package/train_px4_ppo.py --ent-coef=0.02
+
+
+
+
+测试：
+    python train_px4_ppo.py --test-env-mode
