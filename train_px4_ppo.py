@@ -10,6 +10,7 @@ import os
 import pprint
 from typing import Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from torch import nn
@@ -104,7 +105,6 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--logger", type=str, default="tensorboard", choices=["tensorboard", "wandb", "both"])
     parser.add_argument("--wandb-project", type=str, default="px4-pid-optimization")
     parser.add_argument("--watch", default=False, action="store_true", help="Watch the play of pre-trained policy only")
-    parser.add_argument("--save-video", default=False, action="store_true", help="Save test episodes as video")
     
     return parser.parse_args()
 
@@ -123,6 +123,7 @@ def make_px4_env(
     training_num: int,
     test_num: int,
     test_env_mode: bool,
+    watch: bool,
 ) -> Tuple:
     """创建PX4四旋翼环境"""
     
@@ -132,26 +133,25 @@ def make_px4_env(
                 control_type=control_type,
                 trajectory_type=trajectory_type,
                 yaw_type=yaw_type,
-                max_episode_steps=max_episode_steps,
+                max_episode_steps=500 if (watch) else max_episode_steps,
                 dt=sim_dt,
                 rl_dt=rl_dt,
                 dense_reward_scale=dense_reward_scale,
                 wind_type=wind_type,
                 wind_strength=wind_strength,
-                render_mode=None,
+                render_mode="rgb_array" if (watch) else None,           #"human","rgb_array"
                 test_env_mode=enable_step_csv,  # 仅在 test_env_mode 下启用写 CSV
             )
             env.reset(seed=seed + seed_offset)
             return env
         return _init
     
-    if test_env_mode:
+    if test_env_mode or watch:
         # 单环境训练/测试，便于在 env.step 内写入 CSV
-        base_env = make_env(seed_offset=0, enable_step_csv=True)()
-        train_envs = DummyVectorEnv([lambda: base_env])  # 使用已创建的同一个 env
+        env = make_env(seed_offset=0, enable_step_csv=True)()
+        train_envs = DummyVectorEnv([lambda: env])  # 使用已创建的同一个 env
         # 测试环境单独一个，以免在测试时复用训练 env 的内部 buffer
         test_envs = DummyVectorEnv([make_env(seed_offset=1, enable_step_csv=True)])
-        env = base_env
     else:
         # 创建单个环境用于获取空间信息
         env = make_env(seed_offset=0, enable_step_csv=False)()
@@ -230,6 +230,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         training_num=args.training_num,
         test_num=args.test_num,
         test_env_mode=args.test_env_mode,
+        watch=args.watch,
     )
     
     args.state_shape = env.observation_space.shape
@@ -444,7 +445,21 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         }
         torch.save(state, final_path)
     
+    else:
+        print("仅观看模式：加载已训练模型，与环境交互 1 个回合，并绘图")
+        if args.resume_path is None:
+            raise ValueError("Please provide --resume-path to watch the pre-trained policy.")
 
+        ckpt = torch.load(args.resume_path, map_location=args.device, weights_only=False)
+        state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+        policy.load_state_dict(state_dict)
+        policy.eval()
+
+        # 重置收集器与环境
+        test_collector.reset()
+        result = test_collector.collect(n_episode=1, render=args.render)
+
+        print(f"观看结果: {result}")
 
 if __name__ == "__main__":
     train_px4_ppo()

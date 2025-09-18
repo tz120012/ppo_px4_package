@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+用于自动配置奖励构成各项的权重与 Huber/Robust 参数，并生成可直接用于训练的 sw 字典。
 使用命令：
 python auto_weight_from_csv.py \
   --csv ./log_step_metrics/.csv \

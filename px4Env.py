@@ -6,6 +6,9 @@ from typing import Dict, List, Optional, Tuple, Any
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+import imageio.v2 as imageio
+
 
 import gymnasium as gym
 from gymnasium import spaces
@@ -26,6 +29,28 @@ logging.basicConfig(
 log = logging.getLogger("PX4Env")
 
 
+def _euler_to_quaternion(euler):
+    phi, theta, psi = euler[0], euler[1], euler[2]
+    cos_phi_2 = np.cos(phi / 2.0)
+    sin_phi_2 = np.sin(phi / 2.0)
+    cos_theta_2 = np.cos(theta / 2.0)
+    sin_theta_2 = np.sin(theta / 2.0)
+    cos_psi_2 = np.cos(psi / 2.0)
+    sin_psi_2 = np.sin(psi / 2.0)
+
+    w = cos_phi_2 * cos_theta_2 * cos_psi_2 + sin_phi_2 * sin_theta_2 * sin_psi_2
+    x = sin_phi_2 * cos_theta_2 * cos_psi_2 - cos_phi_2 * sin_theta_2 * sin_psi_2
+    y = cos_phi_2 * sin_theta_2 * cos_psi_2 + sin_phi_2 * cos_theta_2 * sin_psi_2
+    z = cos_phi_2 * cos_theta_2 * sin_psi_2 - sin_phi_2 * sin_theta_2 * cos_psi_2
+    return np.array([w, x, y, z])
+
+def _quaternion_to_euler(quat):
+    w, x, y, z = quat[0], quat[1], quat[2], quat[3]
+    phi = np.arctan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+    theta = np.arcsin(2.0 * (w * y - z * x))
+    psi = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    return np.array([phi, theta, psi])
+
 class QuadcopterEnv(gym.Env):
     """
     PX4四旋翼仿真环境用于强化学习
@@ -44,8 +69,10 @@ class QuadcopterEnv(gym.Env):
                  dense_reward_scale: float = 1.0,   # 即时奖励权重缩放
                  wind_type: str = 'None',
                  wind_strength: float = 2.0,
-                 render_mode: Optional[str] = None,
-                 test_env_mode: bool = False):      # 测试模式：在 step 末尾写 CSV
+                 test_env_mode: bool = False,      # 测试模式：在 step 末尾写 CSV
+                 render_mode: Optional[str] = None 
+            ):
+
         """
         初始化四旋翼环境
 
@@ -77,6 +104,12 @@ class QuadcopterEnv(gym.Env):
         self.render_mode = render_mode
         self.dense_reward_scale = float(dense_reward_scale)
         self.test_env_mode = test_env_mode
+
+        # 新增：渲染模式
+        self.render_mode = render_mode
+        self._render_inited = False
+        self._fig = None
+        self._ax = None
 
         # 奖励权重（即时）
         self.reward_weights = dict(
@@ -181,7 +214,7 @@ class QuadcopterEnv(gym.Env):
         self._csv_fh = None
         self._csv_writer = None
         self._csv_header_written = False
-
+        self.render_data = None
     # =========================
     # 仿真初始化与内部工具
     # =========================
@@ -220,7 +253,6 @@ class QuadcopterEnv(gym.Env):
 
         # 子步越界保护标记
         self._force_truncate = False
-
     # =========================
     # CSV 工具
     # =========================
@@ -386,11 +418,13 @@ class QuadcopterEnv(gym.Env):
             self.quad.pos += noise
             self.quad.state[0:3] = self.quad.pos
 
-        self.step_action = None
-        self.step_reward = None
-
-        obs = self._get_observation()
+        obs = self._get_observation(self.ctrl.sDesCalc)
         info = self._get_info()
+
+        self.step_action = np.zeros((20,), dtype=getattr(self.action_space, "dtype", np.float32))
+        self.step_reward = 0.0
+        self.render_data = self._pack_render_data(obs, self.step_action, self.step_reward)
+
         return obs, info
 
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
@@ -398,6 +432,13 @@ class QuadcopterEnv(gym.Env):
         self.step_action = action
         action = np.clip(action, 0.0, 1.0)          # Action参数剪切处理
         self._apply_pid_parameters(action)          # 将参数写入PID控制器
+
+        try:
+            import torch
+            if isinstance(action, torch.Tensor):
+                action = action.detach().cpu().numpy()
+        except Exception:
+            pass
 
         # 需要运行的仿真子步数量
         substeps = max(1, int(round(self.rl_dt / self.dt)))     # 计算每个Step 需要多少个仿真子步
@@ -426,7 +467,8 @@ class QuadcopterEnv(gym.Env):
             executed_substeps += 1
 
             # 计算即时状态误差
-            m = self._extract_metrics(sDes)
+            sDesclc = self.ctrl.sDesCalc
+            m = self._extract_metrics(sDesclc)
 
             # 即时奖励（dense，细粒度，引导稳定）
             dense_r = self._dense_reward_instant(m)
@@ -476,7 +518,7 @@ class QuadcopterEnv(gym.Env):
             max_substeps_total = self.episode_t_all.shape[0]
             self._episode_len = min(self.current_substep, max_substeps_total)
 
-        obs = self._get_observation()
+        obs = self._get_observation(self.ctrl.sDesCalc)
         info = self._get_info()
 
         # 在 info 中回传每步奖励拆解，供分析
@@ -509,6 +551,13 @@ class QuadcopterEnv(gym.Env):
 
         # 新增：仅在 test_env_mode=True 时写 CSV
         self._write_step_csv(info)
+
+        # 渲染数据打包
+        # self.render_data = self._pack_render_data(obs, self.step_action, self.step_reward)
+
+        self.step_action = np.asarray(action, dtype=np.float32).ravel()
+        self.step_reward = float(reward)
+        self.render_data = self._pack_render_data(obs, self.step_action, self.step_reward)
 
         return obs, reward, terminated, truncated, info
 
@@ -551,12 +600,11 @@ class QuadcopterEnv(gym.Env):
     # =========================
     # 观测
     # =========================
-    def _get_observation(self) -> np.ndarray:
-        sDes = self.traj.desiredState(self.time, self.dt, self.quad)
-        pos_ref = sDes[0:3]
-        vel_ref = sDes[3:6]
-        eul_ref = sDes[12:15]
-        omega_ref = sDes[15:18]
+    def _get_observation(self,sDesCalc) -> np.ndarray:
+        pos_ref = sDesCalc[0:3]
+        vel_ref = sDesCalc[3:6]
+        eul_ref = _quaternion_to_euler(sDesCalc[9:13])
+        omega_ref = sDesCalc[13:16]
 
         pos_fb = self.quad.pos
         vel_fb = self.quad.vel
@@ -569,36 +617,47 @@ class QuadcopterEnv(gym.Env):
         ])
         return obs.astype(np.float32)
 
-    def _euler_to_quaternion(self, euler):
-        phi, theta, psi = euler[0], euler[1], euler[2]
-        cos_phi_2 = np.cos(phi / 2.0)
-        sin_phi_2 = np.sin(phi / 2.0)
-        cos_theta_2 = np.cos(theta / 2.0)
-        sin_theta_2 = np.sin(theta / 2.0)
-        cos_psi_2 = np.cos(psi / 2.0)
-        sin_psi_2 = np.sin(psi / 2.0)
+        # 将obs,action,reward打包为一维数组，便于渲染    
+    # def _pack_render_data(self, obs, action, reward):
+    #     obs = np.ravel(obs)  # (n,)
+    #     # 离散动作：转为标量数组；连续动作：拍扁
+    #     if np.isscalar(action):
+    #         action = np.array([action])
+    #     else:
+    #         action = np.ravel(action)
+    #     reward = np.atleast_1d(reward).astype(np.float32)  # (1,)
+    #     return np.concatenate([obs, action, reward], axis=0)
+    
+    def _pack_render_data(self, obs, action=None, reward=None):
+        import numpy as np
+        # 统一类型
+        try:
+            import torch
+            if action is not None and isinstance(action, torch.Tensor):
+                action = action.detach().cpu().numpy()
+            if reward is not None and isinstance(reward, torch.Tensor):
+                reward = reward.detach().cpu().item()
+        except Exception:
+            pass
 
-        w = cos_phi_2 * cos_theta_2 * cos_psi_2 + sin_phi_2 * sin_theta_2 * sin_psi_2
-        x = sin_phi_2 * cos_theta_2 * cos_psi_2 - cos_phi_2 * sin_theta_2 * sin_psi_2
-        y = cos_phi_2 * sin_theta_2 * cos_psi_2 + sin_phi_2 * cos_theta_2 * sin_psi_2
-        z = cos_phi_2 * cos_theta_2 * sin_psi_2 - sin_phi_2 * sin_theta_2 * cos_psi_2
-        return np.array([w, x, y, z])
+        act1d = None if action is None else np.asarray(action, dtype=np.float32).ravel()
+        rew   = None if reward is None else float(np.asarray(reward).reshape(()))
 
-    def _quaternion_to_euler(self, quat):
-        w, x, y, z = quat[0], quat[1], quat[2], quat[3]
-        phi = np.arctan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
-        theta = np.arcsin(2.0 * (w * y - z * x))
-        psi = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
-        return np.array([phi, theta, psi])
+        return {
+            "obs": np.asarray(obs),   # 原样保留
+            "action": act1d,          # 形状 (20,)
+            "reward": rew,            # 标量
+        }
+
 
     # =========================
     # 奖励设计
     # =========================
 
     # 统一的指标/误差提取（供奖励与窗口累计复用）
-    def _extract_metrics(self, sDes: np.ndarray) -> Dict[str, Any]:
+    def _extract_metrics(self, sDesCalc: np.ndarray) -> Dict[str, Any]:
         """
-        从 sDes 及当前状态提取误差指标。
+        从 sDesCalc 及当前状态提取误差指标。
         返回:
             - pos_err_xy, pos_err_z
             - vel_err_xy, vel_err_z
@@ -607,10 +666,10 @@ class QuadcopterEnv(gym.Env):
             - pos_err_vec, vel_err_vec
         """
         # 参考状态
-        pos_ref = sDes[0:3]
-        vel_ref = sDes[3:6]
-        eul_ref = sDes[12:15]
-        omega_ref = sDes[15:18]
+        pos_ref = sDesCalc[0:3]
+        vel_ref = sDesCalc[3:6]
+        eul_ref = _quaternion_to_euler(sDesCalc[9:13])
+        omega_ref = sDesCalc[13:16]
 
         # 当前状态
         pos = self.quad.pos
@@ -896,132 +955,452 @@ class QuadcopterEnv(gym.Env):
     # =========================
     # 渲染与关闭
     # =========================
-    def render(self, mode: str = 'data_log', save_root: str = "log_data", csv_filename: str = "episode_log.csv"):
-        """
-        mode:
-            - 'human': 绘图 + 动画（plt.show）
-            - 'data_log': 保存为“列式 CSV”，第一行为列名；第一列为 t_all
-        save_root: 保存目录
-        csv_filename: CSV 文件名
-        """
-        import numpy as np
 
+    # self.render_data = [obs, action, reward]
+    # def _update_figure_from_render_data(self):
+    #     rd = getattr(self, "render_data", None)
+    #     if rd is None:
+    #         return False
+
+    #     # 解析 rd: 8 段各 3 维，共 24 长度
+    #     try:
+    #         pos_ref = rd[0:3];   vel_ref = rd[3:6];   eul_ref = rd[6:9];   omg_ref = rd[9:12]
+    #         pos_fb  = rd[12:15]; vel_fb  = rd[15:18]; eul_fb  = rd[18:21]; omg_fb  = rd[21:24]
+    #     except Exception:
+    #         return False
+
+    #     # 确保已初始化 figure/axes/lines
+    #     if not getattr(self, "_render_inited", False):
+    #         import matplotlib.pyplot as plt
+    #         plt.ion() if self.render_mode == "human" else plt.ioff()
+    #         self._fig, self._axs = plt.subplots(4, 1, figsize=(10, 12), constrained_layout=True)
+    #         self._lines = {"pos": {"ref": [], "fb": []},
+    #                     "vel": {"ref": [], "fb": []},
+    #                     "eul": {"ref": [], "fb": []},
+    #                     "omg": {"ref": [], "fb": []}}
+    #         self._t_hist = []
+    #         self._pos_ref_hist, self._pos_fb_hist = [], []
+    #         self._vel_ref_hist, self._vel_fb_hist = [], []
+    #         self._eul_ref_hist, self._eul_fb_hist = [], []
+    #         self._omg_ref_hist, self._omg_fb_hist = [], []
+
+    #         self._axs[0].set_title("Position (x,y,z)");      self._axs[0].set_ylabel("pos [m]")
+    #         self._axs[1].set_title("Velocity (vx,vy,vz)");   self._axs[1].set_ylabel("vel [m/s]")
+    #         self._axs[2].set_title("Euler (roll,pitch,yaw) [rad]"); self._axs[2].set_ylabel("angle [rad]")
+    #         self._axs[3].set_title("Body rates (wx,wy,wz) [rad/s]"); self._axs[3].set_ylabel("rate [rad/s]")
+    #         self._axs[3].set_xlabel("Step")
+    #         colors = ["tab:blue", "tab:orange", "tab:green"]
+    #         for k, ax in zip(["pos", "vel", "eul", "omg"], self._axs):
+    #             for i in range(3):
+    #                 (lref,) = ax.plot([], [], linestyle="--", color=colors[i], alpha=0.8, label=f"{k}[{i}]_ref")
+    #                 (lfb,)  = ax.plot([], [], linestyle="-",  color=colors[i], alpha=0.9, label=f"{k}[{i}]_fb")
+    #                 self._lines[k]["ref"].append(lref)
+    #                 self._lines[k]["fb"].append(lfb)
+    #             ax.grid(True, alpha=0.3)
+    #             ax.legend(ncols=3, fontsize=8, loc="upper right")
+    #         self._render_inited = True
+
+    #     # 追加历史
+    #     step_idx = self._t_hist[-1] + 1 if self._t_hist else 0
+    #     self._t_hist.append(step_idx)
+    #     self._pos_ref_hist.append(pos_ref); self._pos_fb_hist.append(pos_fb)
+    #     self._vel_ref_hist.append(vel_ref); self._vel_fb_hist.append(vel_fb)
+    #     self._eul_ref_hist.append(eul_ref); self._eul_fb_hist.append(eul_fb)
+    #     self._omg_ref_hist.append(omg_ref); self._omg_fb_hist.append(omg_fb)
+
+    #     # 数组化
+    #     def to_arr(lst):
+    #         arr = np.asarray(lst)
+    #         if arr.ndim == 1:
+    #             arr = arr.reshape(1, -1)
+    #         return arr
+    #     t = np.asarray(self._t_hist)
+    #     pos_ref_arr = to_arr(self._pos_ref_hist); pos_fb_arr = to_arr(self._pos_fb_hist)
+    #     vel_ref_arr = to_arr(self._vel_ref_hist); vel_fb_arr = to_arr(self._vel_fb_hist)
+    #     eul_ref_arr = to_arr(self._eul_ref_hist); eul_fb_arr = to_arr(self._eul_fb_hist)
+    #     omg_ref_arr = to_arr(self._omg_ref_hist); omg_fb_arr = to_arr(self._omg_fb_hist)
+
+    #     # 更新线条
+    #     for i in range(3):
+    #         self._lines["pos"]["ref"][i].set_data(t, pos_ref_arr[:, i])
+    #         self._lines["pos"]["fb"][i].set_data(t,  pos_fb_arr[:, i])
+    #         self._lines["vel"]["ref"][i].set_data(t, vel_ref_arr[:, i])
+    #         self._lines["vel"]["fb"][i].set_data(t,  vel_fb_arr[:, i])
+    #         self._lines["eul"]["ref"][i].set_data(t, eul_ref_arr[:, i])
+    #         self._lines["eul"]["fb"][i].set_data(t,  eul_fb_arr[:, i])
+    #         self._lines["omg"]["ref"][i].set_data(t, omg_ref_arr[:, i])
+    #         self._lines["omg"]["fb"][i].set_data(t,  omg_fb_arr[:, i])
+
+    #     # 重新缩放
+    #     for ax in self._axs:
+    #         ax.relim()
+    #         ax.autoscale_view(True, True, True)
+
+    #     return True
+
+    def _update_figure_from_render_data(self):
+        rd = getattr(self, "render_data", None)
+        if rd is None:
+            return False
+
+        # ---------- 1) 解析 render_data ----------
+        if isinstance(rd, dict):
+            obs = rd.get("obs", None)
+            action = rd.get("action", None)
+            reward = rd.get("reward", None)
+        elif isinstance(rd, (list, tuple)):
+            obs = rd[0] if len(rd) > 0 else None
+            action = rd[1] if len(rd) > 1 else None
+            reward = rd[2] if len(rd) > 2 else None
+        else:
+            obs, action, reward = rd, None, None 
+
+        def as1d(x):
+            if x is None:
+                return None
+            arr = np.asarray(x, dtype=np.float32)
+            return arr.ravel()
+
+        obs1d = as1d(obs)
+        act1d = as1d(action)
+        rew_val = None if reward is None else float(np.asarray(reward).reshape(()))
+
+        if not getattr(self, "_debug_once", False):
+            print("[render init] act1d:",
+                None if act1d is None else (type(act1d), getattr(act1d, "shape", None), act1d[:5]),
+                "rew_val:", rew_val)
+            print("[render init] rd type:", type(getattr(self, "render_data", None)))
+            self._debug_once = True
+
+        # ---------- 2) 从 obs 中取出 8 组 3D ----------
+        def take3(x):
+            x = as1d(x)
+            if x is None or x.size < 3:
+                return None
+            return x[:3]
+
+        pos_ref = vel_ref = eul_ref = omg_ref = None
+        pos_fb  = vel_fb  = eul_fb  = omg_fb  = None
+
+        if isinstance(obs, dict):
+            pos_ref = take3(obs.get("pos_ref"))
+            vel_ref = take3(obs.get("vel_ref"))
+            eul_ref = take3(obs.get("eul_ref"))
+            omg_ref = take3(obs.get("omg_ref"))
+            pos_fb  = take3(obs.get("pos_fb"))
+            vel_fb  = take3(obs.get("vel_fb"))
+            eul_fb  = take3(obs.get("eul_fb"))
+            omg_fb  = take3(obs.get("omg_fb"))
+        elif obs1d is not None and obs1d.size >= 24:
+            pos_ref = obs1d[0:3];   vel_ref = obs1d[3:6];   eul_ref = obs1d[6:9];   omg_ref = obs1d[9:12]
+            pos_fb  = obs1d[12:15]; vel_fb  = obs1d[15:18]; eul_fb  = obs1d[18:21]; omg_fb  = obs1d[21:24]
+        else:
+            return False
+
+        # 关键补丁：缺任何一组都直接跳过本帧
+        required = (pos_ref, vel_ref, eul_ref, omg_ref, pos_fb, vel_fb, eul_fb, omg_fb)
+        if any(x is None for x in required):
+            return False
+
+        need_act_axis = act1d is not None and act1d.size > 0
+        need_rew_axis = rew_val is not None
+
+        # ---------- 3) 初始化图像（两列布局） ----------
+        if not getattr(self, "_render_inited", False):
+            plt.ion() if getattr(self, "render_mode", None) == "human" else plt.ioff()
+
+            from matplotlib.gridspec import GridSpec
+            self._fig = plt.figure(figsize=(14, 9), constrained_layout=True)
+            gs = GridSpec(nrows=3, ncols=2, figure=self._fig)
+
+            # 两列共享同一个 x 轴（Step）
+            ax_pos = self._fig.add_subplot(gs[0, 0])
+            ax_vel = self._fig.add_subplot(gs[1, 0], sharex=ax_pos)
+            ax_eul = self._fig.add_subplot(gs[2, 0], sharex=ax_pos)
+
+            ax_omg = self._fig.add_subplot(gs[0, 1], sharex=ax_pos)
+            ax_act = self._fig.add_subplot(gs[1, 1], sharex=ax_pos) if need_act_axis else None
+            ax_rew = self._fig.add_subplot(gs[2, 1], sharex=ax_pos) if need_rew_axis else None
+
+            # 记录轴对象（仅包含已创建的轴，便于后续统一 relim/autoscale）
+            self._axs = [ax_pos, ax_vel, ax_eul, ax_omg]
+            if ax_act is not None:
+                self._axs.append(ax_act)
+            if ax_rew is not None:
+                self._axs.append(ax_rew)
+
+            self._render_inited = True
+            self._figure_shown = False  # for human
+
+            # 线条容器
+            self._lines = {
+                "pos": {"ref": [], "fb": []},
+                "vel": {"ref": [], "fb": []},
+                "eul": {"ref": [], "fb": []},
+                "omg": {"ref": [], "fb": []},
+            }
+            if need_act_axis:
+                self._lines["act"] = {"all": []}
+                self._act_dim = int(act1d.size)
+            if need_rew_axis:
+                self._lines["rew"] = {"all": []}
+
+            # 历史缓存
+            self._t_hist = []
+            self._pos_ref_hist, self._pos_fb_hist = [], []
+            self._vel_ref_hist, self._vel_fb_hist = [], []
+            self._eul_ref_hist, self._eul_fb_hist = [], []
+            self._omg_ref_hist, self._omg_fb_hist = [], []
+            if need_act_axis:
+                self._act_hist = []
+            if need_rew_axis:
+                self._rew_hist = []
+
+            # 绘制左列：Position / Velocity / Euler
+            colors = ["tab:blue", "tab:orange", "tab:green"]
+
+            def add_group(ax, key, title, ylabel):
+                ax.set_title(title)
+                ax.set_ylabel(ylabel)
+                for i in range(3):
+                    (lref,) = ax.plot([], [], "--", color=colors[i], alpha=0.85, label=f"{key}[{i}]_ref")
+                    (lfb,)  = ax.plot([], [], "-",  color=colors[i], alpha=0.95, label=f"{key}[{i}]_fb")
+                    self._lines[key]["ref"].append(lref)
+                    self._lines[key]["fb"].append(lfb)
+                ax.grid(True, alpha=0.3)
+                ax.legend(ncols=3, fontsize=8, loc="upper right")
+
+            add_group(ax_pos, "pos", "Position (x,y,z)", "pos [m]")
+            add_group(ax_vel, "vel", "Velocity (vx,vy,vz)", "vel [m/s]")
+            add_group(ax_eul, "eul", "Euler (roll,pitch,yaw) [rad]", "angle [rad]")
+
+            # 绘制右列：Body rates / Action(可选) / Reward(可选)
+            add_group(ax_omg, "omg", "Body rates (wx,wy,wz) [rad/s]", "rate [rad/s]")
+
+            if ax_act is not None:
+                ax_act.set_title("Action")
+                ax_act.set_ylabel("act")
+                act_colors = ["tab:purple", "tab:brown", "tab:cyan", "tab:pink", "tab:gray", "tab:olive"]
+                for i in range(self._act_dim):
+                    c = act_colors[i % len(act_colors)]
+                    (l,) = ax_act.plot([], [], "-", color=c, alpha=0.95, label=f"act[{i}]")
+                    self._lines["act"]["all"].append(l)
+                ax_act.grid(True, alpha=0.3)
+                ax_act.legend(ncols=min(6, self._act_dim), fontsize=8, loc="upper right")
+
+            if ax_rew is not None:
+                ax_rew.set_title("Reward")
+                ax_rew.set_ylabel("r")
+                ax_rew.set_xlabel("Step")
+                (l,) = ax_rew.plot([], [], "-", color="tab:red", alpha=0.95, label="reward")
+                self._lines["rew"]["all"].append(l)
+                ax_rew.grid(True, alpha=0.3)
+                ax_rew.legend(fontsize=8, loc="upper right")
+
+            # 只在每列最底部显示 x 轴刻度
+            for ax in [ax_pos, ax_vel, ax_omg, ax_act] if ax_act is not None else [ax_pos, ax_vel, ax_omg]:
+                ax.label_outer()
+            ax_eul.set_xlabel("Step")
+            if ax_rew is None:
+                # 如果没有 Reward，就让右列当前最底部的轴显示 X 轴标签
+                (ax_act or ax_omg).set_xlabel("Step")
+
+        # ---------- 4) 追加历史 ----------
+        step_idx = self._t_hist[-1] + 1 if self._t_hist else 0
+        self._t_hist.append(step_idx)
+        self._pos_ref_hist.append(pos_ref); self._pos_fb_hist.append(pos_fb)
+        self._vel_ref_hist.append(vel_ref); self._vel_fb_hist.append(vel_fb)
+        self._eul_ref_hist.append(eul_ref); self._eul_fb_hist.append(eul_fb)
+        self._omg_ref_hist.append(omg_ref); self._omg_fb_hist.append(omg_fb)
+        if "act" in self._lines:
+            if act1d is None:
+                act1d = np.zeros(self._act_dim, dtype=np.float32)
+            self._act_hist.append(act1d)
+        if "rew" in self._lines:
+            self._rew_hist.append(0.0 if rew_val is None else float(rew_val))
+
+        # ---------- 5) 刷新线条 ----------
+        def to_arr(lst):
+            arr = np.asarray(lst, dtype=np.float32)
+            if arr.ndim == 1:
+                arr = arr.reshape(1, -1)
+            return arr
+
+        t = np.asarray(self._t_hist, dtype=np.int32)
+        pos_ref_arr = to_arr(self._pos_ref_hist); pos_fb_arr = to_arr(self._pos_fb_hist)
+        vel_ref_arr = to_arr(self._vel_ref_hist); vel_fb_arr = to_arr(self._vel_fb_hist)
+        eul_ref_arr = to_arr(self._eul_ref_hist); eul_fb_arr = to_arr(self._eul_fb_hist)
+        omg_ref_arr = to_arr(self._omg_ref_hist); omg_fb_arr = to_arr(self._omg_fb_hist)
+
+        # 处理航向角，避免-pi到pi的跳变
+        eul_ref_arr_unw = eul_ref_arr.copy()
+        eul_fb_arr_unw  = eul_fb_arr.copy()
+        eul_ref_arr_unw[:, 2] = np.unwrap(eul_ref_arr[:, 2])
+        eul_fb_arr_unw[:, 2]  = np.unwrap(eul_fb_arr[:, 2])
+
+        for i in range(3):
+            self._lines["pos"]["ref"][i].set_data(t, pos_ref_arr[:, i])
+            self._lines["pos"]["fb"][i].set_data(t,  pos_fb_arr[:, i])
+            self._lines["vel"]["ref"][i].set_data(t, vel_ref_arr[:, i])
+            self._lines["vel"]["fb"][i].set_data(t,  vel_fb_arr[:, i])
+            self._lines["eul"]["ref"][i].set_data(t, eul_ref_arr[:, i])
+            self._lines["eul"]["fb"][i].set_data(t,  eul_fb_arr[:, i])
+            self._lines["omg"]["ref"][i].set_data(t, omg_ref_arr[:, i])
+            self._lines["omg"]["fb"][i].set_data(t,  omg_fb_arr[:, i])
+
+        if "act" in self._lines:
+            act_arr = to_arr(self._act_hist)  # (T, A)
+            for i, l in enumerate(self._lines["act"]["all"]):
+                l.set_data(t, act_arr[:, i])
+
+        if "rew" in self._lines:
+            rew_arr = np.asarray(self._rew_hist, dtype=np.float32)  # (T,)
+            self._lines["rew"]["all"][0].set_data(t, rew_arr)
+
+        # ---------- 6) 重新缩放 ----------
+        for ax in self._axs:
+            ax.relim()
+            ax.autoscale_view(True, True, True)
+
+        return True
+    
+    # def render(self):
+    #     if getattr(self, "render_mode", None) is None:
+    #         return None
+
+    #     if self.render_mode == "human":
+    #         updated = self._update_figure_from_render_data()
+    #         if updated:
+    #             self._fig.canvas.draw()
+    #             self._fig.canvas.flush_events()
+    #         return None
+
+    #     if self.render_mode == "rgb_array":
+    #         # 先更新
+    #         self._update_figure_from_render_data()
+
+    #         # 截图
+    #         canvas = FigureCanvasAgg(self._fig)
+    #         canvas.draw()  # 关键：确保缓冲区是最新的
+    #         buf = np.frombuffer(canvas.buffer_rgba(), dtype=np.uint8)
+    #         w, h = self._fig.canvas.get_width_height()
+    #         img = buf.reshape((h, w, 4))[..., :3]
+
+    #         # 保存
+    #         save_frames = getattr(self, "save_frames", True)
+    #         save_dir = getattr(self, "save_dir", "./log_render_frames")
+    #         save_overwrite = getattr(self, "save_overwrite", True)
+    #         # dpi = getattr(self, "save_dpi", None)  # 不用于 imageio，保留给 savefig 用
+    #         if save_frames:
+    #             os.makedirs(save_dir, exist_ok=True)
+    #             if save_overwrite:
+    #                 out_path = os.path.join(save_dir, "frame.png")
+    #             else:
+    #                 idx = getattr(self, "_frame_idx", 0)
+    #                 out_path = os.path.join(save_dir, f"frame_{idx:06d}.png")
+    #                 self._frame_idx = idx + 1
+    #             imageio.imwrite(out_path, img)
+
+    #         return img
+
+    def render(self):
+        mode = getattr(self, "render_mode", None)
+        if mode is None:
+            return None
+
+        updated = self._update_figure_from_render_data()
+        if not updated:
+            # 可选：调试日志，帮助定位为何 update 失败
+            # print("[render] update=False (render_data incomplete or invalid)")
+            return None
+
+        if mode == "human":
+            # 首次显示窗口
+            if not getattr(self, "_figure_shown", False):
+                try:
+                    plt.show(block=False)
+                except Exception:
+                    pass
+                self._figure_shown = True
+
+            self._fig.canvas.draw()
+            try:
+                self._fig.canvas.flush_events()
+                plt.pause(0.001)  # 让 GUI 事件循环跑一下
+            except Exception:
+                pass
+            return None
+
+        if mode == "rgb_array":
+            canvas = FigureCanvasAgg(self._fig)
+            canvas.draw()
+            buf = np.frombuffer(canvas.buffer_rgba(), dtype=np.uint8)
+            w, h = canvas.get_width_height()  # 用 canvas 的尺寸
+            img = buf.reshape((h, w, 4))[..., :3]
+
+            # 保存（可选）
+            save_frames = getattr(self, "save_frames", True)
+            save_dir = getattr(self, "save_dir", "./log_render_frames")
+            save_overwrite = getattr(self, "save_overwrite", True)
+            if save_frames:
+                os.makedirs(save_dir, exist_ok=True)
+                if save_overwrite:
+                    out_path = os.path.join(save_dir, "frame.png")
+                else:
+                    idx = getattr(self, "_frame_idx", 0)
+                    out_path = os.path.join(save_dir, f"frame_{idx:06d}.png")
+                    self._frame_idx = idx + 1
+                imageio.imwrite(out_path, img)
+                # 可选：打印路径，便于确认
+                # print(f"[render] saved {out_path}, img={img.shape} {img.dtype}")
+
+            return img
+
+        # 未知模式
+        return None
+
+    # 暂时没有用，需要测试结束后绘制全部的数据
+    def plot(self):
+        """
+        mode: 绘图 + 动画（plt.show）
+        """        
         try:
-            if mode == 'human':
-                # 绘制静态图
-                utils.makeFigures(
-                    self.quad.params, self.episode_t_all, self.episode_pos_all, self.episode_vel_all,
-                    self.episode_quat_all, self.episode_omega_all, self.episode_euler_all,
-                    self.episode_w_cmd_all, self.episode_wMotor_all, self.episode_thr_all,
-                    self.episode_tor_all, self.episode_sDes_traj_all, self.episode_sDes_calc_all
-                )
+            # 绘制静态图
+            utils.makeFigures(
+                self.quad.params, self.episode_t_all, self.episode_pos_all, self.episode_vel_all,
+                self.episode_quat_all, self.episode_omega_all, self.episode_euler_all,
+                self.episode_w_cmd_all, self.episode_wMotor_all, self.episode_thr_all,
+                self.episode_tor_all, self.episode_sDes_traj_all, self.episode_sDes_calc_all
+            )
 
-                # 动画（注意 ifsave 变量）
-                ifsave = False
-                ani = utils.sameAxisAnimation(
-                    self.episode_t_all, self.traj.wps, self.episode_pos_all,
-                    self.episode_quat_all, self.episode_sDes_traj_all, self.dt,
-                    self.quad.params, self.traj.xyzType, self.traj.yawType, ifsave
-                )
-                plt.show()
-
-            elif mode == 'data_log':
-                os.makedirs(save_root, exist_ok=True)
-                # 建立一个带时间戳的子目录，避免覆盖
-                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-                ep_dir = os.path.join(save_root, f"episode_{stamp}")
-                os.makedirs(ep_dir, exist_ok=True)
-                csv_path = os.path.join(ep_dir, csv_filename)
-
-                # 1) 准备时间列
-                def to_np(x):
-                    return x if isinstance(x, np.ndarray) else np.array(x)
-
-                t_all = to_np(self.episode_t_all).reshape(-1)  # shape (T,)
-                T = t_all.shape[0]
-
-                # 2) 需要写入的数组列表（名称: 数组）
-                arrays = {
-                    "t_all": t_all,
-                    "s_all": to_np(self.episode_s_all),
-                    "pos_all": to_np(self.episode_pos_all),
-                    "vel_all": to_np(self.episode_vel_all),
-                    "quat_all": to_np(self.episode_quat_all),
-                    "omega_all": to_np(self.episode_omega_all),
-                    "euler_all": to_np(self.episode_euler_all),
-                    "sDes_traj_all": to_np(self.episode_sDes_traj_all),
-                    "sDes_calc_all": to_np(self.episode_sDes_calc_all),
-                    "w_cmd_all": to_np(self.episode_w_cmd_all),
-                    "wMotor_all": to_np(self.episode_wMotor_all),
-                    "thr_all": to_np(self.episode_thr_all),
-                    "tor_all": to_np(self.episode_tor_all),
-                }
-
-                # 3) 规范化每个数组到 (T, D) 形状，并生成列名
-                columns = []          # 列名列表
-                matrix_parts = []     # 对应的二维数据块 (T, D)
-
-                for name, arr in arrays.items():
-                    # 确保是 numpy
-                    arr = to_np(arr)
-
-                    # 自动对齐到时间长度 T
-                    if name == "t_all":
-                        arr_T = arr.reshape(T, 1)
-                        columns.append("t_all")
-                        matrix_parts.append(arr_T)
-                        continue
-
-                    if arr.ndim == 0:
-                        arr = arr.reshape(1, 1)
-                    elif arr.ndim == 1:
-                        arr = arr.reshape(-1, 1)
-                    else:
-                        first_dim = arr.shape[0]
-                        rest = int(np.prod(arr.shape[1:])) if arr.ndim > 1 else 1
-                        arr = arr.reshape(first_dim, rest)
-
-                    N = arr.shape[0]
-                    D = arr.shape[1]
-
-                    if N < T:
-                        pad = np.full((T - N, D), np.nan, dtype=float)
-                        arr = np.vstack([arr, pad])
-                    elif N > T:
-                        arr = arr[:T, :]
-
-                    if D == 1:
-                        columns.append(name)
-                    else:
-                        columns.extend([f"{name}_{i}" for i in range(D)])
-
-                    matrix_parts.append(arr)
-
-                full_matrix = np.hstack(matrix_parts)  # shape (T, total_D)
-
-                with open(csv_path, mode="w", newline="") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(columns)
-                    for i in range(T):
-                        row = []
-                        for j in range(full_matrix.shape[1]):
-                            val = full_matrix[i, j]
-                            row.append("" if (isinstance(val, float) and np.isnan(val)) else val)
-                        writer.writerow(row)
-
-                print(f"[render:data_log] Saved columnar CSV to: {csv_path}")
-
-            else:
-                print(f"[render] Unsupported mode: {mode}")
+            # 动画（注意 ifsave 变量）
+            ifsave = False
+            ani = utils.sameAxisAnimation(
+                self.episode_t_all, self.traj.wps, self.episode_pos_all,
+                self.episode_quat_all, self.episode_sDes_traj_all, self.dt,
+                self.quad.params, self.traj.xyzType, self.traj.yawType, ifsave
+            )
+            plt.show()
 
         except Exception as e:
             print(f"Render error: {e}")
             pass
 
+    def _save_render_figure(self, path=None, dpi=150):
+        if getattr(self, "_render_inited", False):
+            import os
+            os.makedirs(getattr(self, "save_dir", "./log_render_exports"), exist_ok=True)
+            if path is None:
+                ep = getattr(self, "_episode_index", 0)
+                path = os.path.join(self.save_dir, f"episode_{ep:04d}.png")
+            self._fig.savefig(path, dpi=dpi, bbox_inches="tight")
+            print(f"[render] figure saved to: {path}")
+
     def close(self):
-        if self.fig is not None:
-            plt.close(self.fig)
-            self.fig = None
-            self.ax = None
-        # 确保关闭 CSV
-        self._close_step_csv()
+        try:
+            self._save_render_figure()
+        except Exception as e:
+            print(f"[render] save on close failed: {e}")
+        if getattr(self, "_render_inited", False):
+            plt.close(self._fig)
+            self._render_inited = False

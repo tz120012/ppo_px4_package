@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+"""
+用户绘制csv数据的图片
 # python plot_csv.py --csv ./log_step_metrics/episode_20250917-201122/step_metrics.csv  --outdir plots --smooth 0 --skip-constant
+"""
 import argparse
 import os
 import sys
