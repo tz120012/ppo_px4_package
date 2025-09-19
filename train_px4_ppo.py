@@ -56,7 +56,7 @@ def get_args() -> argparse.Namespace:
                         help="Enable single-env mode and write per-step info to CSV within env.step")
 
     # 训练参数
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--buffer-size", type=int, default=4096)
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -133,7 +133,7 @@ def make_px4_env(
                 control_type=control_type,
                 trajectory_type=trajectory_type,
                 yaw_type=yaw_type,
-                max_episode_steps=1000 if (watch) else max_episode_steps,
+                max_episode_steps=600 if (watch) else max_episode_steps,
                 dt=sim_dt,
                 rl_dt=rl_dt,
                 dense_reward_scale=dense_reward_scale,

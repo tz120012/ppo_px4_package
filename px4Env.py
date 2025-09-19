@@ -165,30 +165,71 @@ class QuadcopterEnv(gym.Env):
 
         # PID参数安全范围（从归一化动作映射）
         self.pid_safe_min = np.array([
-            0.0, 0.1,   # pos_P_gains: Pxy, Pz (注意我们会复制到X/Y)
-            1.2, 2.0,   # vel_P_gains: Pxydot, Pzdot
-            0.0, 0.2,   # vel_I_gains: Ixydot, Izdot
-            0.1, 0.0,   # vel_D_gains: Dxydot, Dzdot
-            0.0, 0.0, 0.0,  # att_P_gains: Pphi, Ptheta, Ppsi
-            0.01, 0.01, 0.0,  # rate_P_gains: Pp, Pq, Pr
-            0.0, 0.0, 0.0,  # rate_I_gains: Ip, Iq, Ir
-            0.0, 0.0, 0.0   # rate_D_gains: Dp, Dq, Dr
+            0.0, 0.1,           # pos_P_gains: Pxy, Pz (注意我们会复制到X/Y)
+            1.2, 2.0,           # vel_P_gains: Pxydot, Pzdot
+            0.0, 0.2,           # vel_I_gains: Ixydot, Izdot
+            0.1, 0.0,           # vel_D_gains: Dxydot, Dzdot
+            0.0, 0.0, 0.0,      # att_P_gains: Pphi, Ptheta, Ppsi
+            0.01, 0.01, 0.0,    # rate_P_gains: Pp, Pq, Pr
+            0.0, 0.0, 0.0,      # rate_I_gains: Ip, Iq, Ir
+            0.0, 0.0, 0.0       # rate_D_gains: Dp, Dq, Dr
         ])
         self.pid_safe_max = np.array([
-            2.0, 1.5,     # pos_P_gains
-            5.0, 15.0,   # vel_P_gains
-            60.0, 3.0,   # vel_I_gains
-            2.0, 2.0,     # vel_D_gains
-            12.0, 12.0, 5.0,  # att_P_gains
-            0.5, 0.6, 0.6,  # rate_P_gains
-            10.0, 10.0, 10.0,    # rate_I_gains
-            0.01, 0.01, 0.01     # rate_D_gains
+            2.0, 1.5,           # pos_P_gains
+            5.0, 15.0,          # vel_P_gains
+            60.0, 3.0,          # vel_I_gains
+            2.0, 2.0,           # vel_D_gains
+            12.0, 12.0, 5.0,    # att_P_gains
+            0.5, 0.6, 0.6,      # rate_P_gains
+            10.0, 10.0, 10.0,   # rate_I_gains
+            0.01, 0.01, 0.01    # rate_D_gains
         ])
+
+        scale = np.array([
+            0.25, 0.25,   # pos_P: Pxy, Pz
+            0.25, 0.25,   # vel_P: Pxydot, Pzdot
+            0.08, 0.08,   # vel_I: Ixydot, Izdot
+            0.18, 0.18,   # vel_D: Dxydot, Dzdot
+            0.20, 0.20, 0.20,  # att_P: Pphi, Ptheta, Ppsi
+            0.15, 0.15, 0.15,  # rate_P: Pp, Pq, Pr
+            0.06, 0.06, 0.06,  # rate_I: Ip, Iq, Ir
+            0.12, 0.12, 0.12   # rate_D: Dp, Dq, Dr
+        ], dtype=np.float32)
+
+        range_vec = self.pid_safe_max - self.pid_safe_min
+        self.deltaK_max = scale * range_vec
+
+        # 初始化上一时刻增益（基线） 这里用安全范围的中点作为默认基线
+        mid = (self.pid_safe_min + self.pid_safe_max) / 2.0
+
+        # 将 20维中 (xy, z) 段展开为三轴，形成控制器需要的三轴字典
+        pos_P_gains = (mid[0], mid[0], mid[1])
+        vel_P_gains = (mid[2], mid[2], mid[3])
+        vel_I_gains = (mid[4], mid[4], mid[5])
+        vel_D_gains = (mid[6], mid[6], mid[7])
+        att_P_gains = (mid[8], mid[9], mid[10])
+        rate_P_gains = (mid[11], mid[12], mid[13])
+        rate_I_gains = (mid[14], mid[15], mid[16])
+        rate_D_gains = (mid[17], mid[18], mid[19])
+
+        self.pid_K_prev = {
+            'pos_P_gains': pos_P_gains,
+            'vel_P_gains': vel_P_gains,
+            'vel_I_gains': vel_I_gains,
+            'vel_D_gains': vel_D_gains,
+            'att_P_gains': att_P_gains,
+            'rate_P_gains': rate_P_gains,
+            'rate_I_gains': rate_I_gains,
+            'rate_D_gains': rate_D_gains,
+        }
+
+        # 同步到控制器一次，确保 ctrl 内部与 env 对齐
+        self.ctrl.update_gains(self.pid_K_prev)
 
         # 定义动作空间（所有PID参数值）
         # 参数顺序: [0-7]位置P/速度PID, [8-10]姿态P, [11-19]角速率PID
         self.action_space = spaces.Box(
-            low=0.0, high=1.0, shape=(20,), dtype=np.float32
+            low=-1.0, high=1.0, shape=(20,), dtype=np.float32
         )
 
         # 定义观测空间
@@ -409,6 +450,30 @@ class QuadcopterEnv(gym.Env):
 
         self._initialize_simulation()
 
+        # 重置初始参数
+        mid = (self.pid_safe_min + self.pid_safe_max) / 2.0
+
+        pos_P_gains = (mid[0], mid[0], mid[1])
+        vel_P_gains = (mid[2], mid[2], mid[3])
+        vel_I_gains = (mid[4], mid[4], mid[5])
+        vel_D_gains = (mid[6], mid[6], mid[7])
+        att_P_gains = (mid[8], mid[9], mid[10])
+        rate_P_gains = (mid[11], mid[12], mid[13])
+        rate_I_gains = (mid[14], mid[15], mid[16])
+        rate_D_gains = (mid[17], mid[18], mid[19])
+
+        self.pid_K_prev = {
+            'pos_P_gains': pos_P_gains,
+            'vel_P_gains': vel_P_gains,
+            'vel_I_gains': vel_I_gains,
+            'vel_D_gains': vel_D_gains,
+            'att_P_gains': att_P_gains,
+            'rate_P_gains': rate_P_gains,
+            'rate_I_gains': rate_I_gains,
+            'rate_D_gains': rate_D_gains,
+        }
+        self.ctrl.update_gains(self.pid_K_prev)
+
         # 如果是测试环境模式，打开新的 CSV 文件并写表头
         self._close_step_csv()
         self._open_step_csv()
@@ -429,9 +494,7 @@ class QuadcopterEnv(gym.Env):
 
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """执行一个环境步骤：保持该action在rl_dt时长内，包含多个仿真子步"""
-        self.step_action = action
-        action = np.clip(action, 0.0, 1.0)          # Action参数剪切处理
-        self._apply_pid_parameters(action)          # 将参数写入PID控制器
+        self.step_action = self._apply_pid_parameters(action)          # 将参数写入PID控制器
 
         try:
             import torch
@@ -564,26 +627,118 @@ class QuadcopterEnv(gym.Env):
     # =========================
     # 参数应用与仿真推进
     # =========================
-    def _apply_pid_parameters(self, action: np.ndarray):
-        """将归一化的动作转换为PID参数并应用到控制系统"""
-        pos_P_gains_from_action = self.pid_safe_min[0:2] + (self.pid_safe_max[0:2] - self.pid_safe_min[0:2]) * action[0:2]
-        vel_P_gains_from_action = self.pid_safe_min[2:4] + (self.pid_safe_max[2:4] - self.pid_safe_min[2:4]) * action[2:4]
-        vel_I_gains_from_action = self.pid_safe_min[4:6] + (self.pid_safe_max[4:6] - self.pid_safe_min[4:6]) * action[4:6]
-        vel_D_gains_from_action = self.pid_safe_min[6:8] + (self.pid_safe_max[6:8] - self.pid_safe_min[6:8]) * action[6:8]
-        att_P_gains_from_action = self.pid_safe_min[8:11] + (self.pid_safe_max[8:11] - self.pid_safe_min[8:11]) * action[8:11]
-        rate_P_gains_from_action = self.pid_safe_min[11:14] + (self.pid_safe_max[11:14] - self.pid_safe_min[11:14]) * action[11:14]
-        rate_I_gains_from_action = self.pid_safe_min[14:17] + (self.pid_safe_max[14:17] - self.pid_safe_min[14:17]) * action[14:17]
-        rate_D_gains_from_action = self.pid_safe_min[17:20] + (self.pid_safe_max[17:20] - self.pid_safe_min[17:20]) * action[17:20]
+    # def _apply_pid_parameters(self, action: np.ndarray):
+    #     """将归一化的动作转换为PID参数并应用到控制系统"""
+    #     pos_P_gains_from_action = self.pid_safe_min[0:2] + (self.pid_safe_max[0:2] - self.pid_safe_min[0:2]) * action[0:2]
+    #     vel_P_gains_from_action = self.pid_safe_min[2:4] + (self.pid_safe_max[2:4] - self.pid_safe_min[2:4]) * action[2:4]
+    #     vel_I_gains_from_action = self.pid_safe_min[4:6] + (self.pid_safe_max[4:6] - self.pid_safe_min[4:6]) * action[4:6]
+    #     vel_D_gains_from_action = self.pid_safe_min[6:8] + (self.pid_safe_max[6:8] - self.pid_safe_min[6:8]) * action[6:8]
+    #     att_P_gains_from_action = self.pid_safe_min[8:11] + (self.pid_safe_max[8:11] - self.pid_safe_min[8:11]) * action[8:11]
+    #     rate_P_gains_from_action = self.pid_safe_min[11:14] + (self.pid_safe_max[11:14] - self.pid_safe_min[11:14]) * action[11:14]
+    #     rate_I_gains_from_action = self.pid_safe_min[14:17] + (self.pid_safe_max[14:17] - self.pid_safe_min[14:17]) * action[14:17]
+    #     rate_D_gains_from_action = self.pid_safe_min[17:20] + (self.pid_safe_max[17:20] - self.pid_safe_min[17:20]) * action[17:20]
 
-        # 将XY共用参数复制展开为三轴
-        pos_P_gains = (pos_P_gains_from_action[0], pos_P_gains_from_action[0], pos_P_gains_from_action[1])
-        vel_P_gains = (vel_P_gains_from_action[0], vel_P_gains_from_action[0], vel_P_gains_from_action[1])
-        vel_I_gains = (vel_I_gains_from_action[0], vel_I_gains_from_action[0], vel_I_gains_from_action[1])
-        vel_D_gains = (vel_D_gains_from_action[0], vel_D_gains_from_action[0], vel_D_gains_from_action[1])
-        att_P_gains = att_P_gains_from_action
-        rate_P_gains = rate_P_gains_from_action
-        rate_I_gains = rate_I_gains_from_action
-        rate_D_gains = rate_D_gains_from_action
+    #     # 将XY共用参数复制展开为三轴
+    #     pos_P_gains = (pos_P_gains_from_action[0], pos_P_gains_from_action[0], pos_P_gains_from_action[1])
+    #     vel_P_gains = (vel_P_gains_from_action[0], vel_P_gains_from_action[0], vel_P_gains_from_action[1])
+    #     vel_I_gains = (vel_I_gains_from_action[0], vel_I_gains_from_action[0], vel_I_gains_from_action[1])
+    #     vel_D_gains = (vel_D_gains_from_action[0], vel_D_gains_from_action[0], vel_D_gains_from_action[1])
+    #     att_P_gains = att_P_gains_from_action
+    #     rate_P_gains = rate_P_gains_from_action
+    #     rate_I_gains = rate_I_gains_from_action
+    #     rate_D_gains = rate_D_gains_from_action
+
+    #     gains_from_action = {
+    #         'pos_P_gains': pos_P_gains,
+    #         'vel_P_gains': vel_P_gains,
+    #         'vel_I_gains': vel_I_gains,
+    #         'vel_D_gains': vel_D_gains,
+    #         'att_P_gains': att_P_gains,
+    #         'rate_P_gains': rate_P_gains,
+    #         'rate_I_gains': rate_I_gains,
+    #         'rate_D_gains': rate_D_gains,
+    #     }
+    #     self.ctrl.update_gains(gains_from_action)
+    
+    def _apply_pid_parameters(self, action: np.ndarray) -> np.ndarray:
+        """
+        将标准化动作转为 ΔK（增量），在物理范围内更新 PID 参数，并应用到控制系统。
+        - 假设 action 为 shape (20,)
+        - 推荐 action ∈ [-1, 1]；若仍是 [0,1]，会先平移缩放到 [-1,1]
+        - 使用 self.deltaK_max: shape(20,) 每维允许的最大增量
+        - 使用 self.pid_safe_min/max: shape(20,) 物理上下界（与原切片一致）
+        - 维护 self.pid_K_prev: dict 保存上一次的各环增益（用于增量与平滑/限速）
+        - 可选：速率限制 self.rate_limit: shape(20,)
+        - 可选：一阶平滑系数 self.alpha ∈ (0,1]
+        """
+        action = np.asarray(action, dtype=np.float32)
+
+        # 1) 将 [0,1] 的动作平移到 [-1,1]（如果动作空间已经是 [-1,1]，这步等价于恒等或可移除）
+        a = np.clip(action, -1.0, 1.0)
+
+        # 2) 计算每维 ΔK（按各维 deltaK_max 缩放）
+        # 需要你在 __init__ 中定义 self.deltaK_max = np.array(shape=(20,))
+        deltaK = self.deltaK_max * a  # shape (20,)
+
+        # 3) 取出上一时刻的绝对增益（拼成与 action 对齐的 1x20 向量）
+        # 这些来自你系统当前实际使用的 PID（不是安全上下界）
+        # 假设按照你原来的分段顺序拼接：
+        K_prev_vec = np.concatenate([
+            np.array(self.pid_K_prev['pos_P_gains'])[ [0, 2] ],        # XY->x取index0, Z取index? 见下方注释
+            np.array(self.pid_K_prev['vel_P_gains'])[ [0, 2] ],
+            np.array(self.pid_K_prev['vel_I_gains'])[ [0, 2] ],
+            np.array(self.pid_K_prev['vel_D_gains'])[ [0, 2] ],
+            np.array(self.pid_K_prev['att_P_gains']),                   # 3
+            np.array(self.pid_K_prev['rate_P_gains']),                  # 3
+            np.array(self.pid_K_prev['rate_I_gains']),                  # 3
+            np.array(self.pid_K_prev['rate_D_gains']),                  # 3
+        ], axis=0).astype(np.float32)
+
+        # 说明：
+        # 你原代码中 XY 共用参数复制到 X 和 Y（两个维度），“第三个值用作 Z”。
+        # 这里在拼接时，我们取 pos/vel 的两个值：index0 表示 XY 共用值，index1 表示 Z 值。
+        # 若你内部存储是 (X, Y, Z)，且 X=Y=shared，请确保 pid_K_prev 中 pos/vel 系列的结构与这里一致。
+        # 如果 pid_K_prev 存的是 (sharedXY, Z)，则这里索引就按 [0,1] 即可。上面写法仅示意。
+        # 请按你的实际数据结构调整索引映射。
+
+        # 4) 计算提议增益并进行物理裁剪
+        K_min = self.pid_safe_min.astype(np.float32)  # shape (20,)
+        K_max = self.pid_safe_max.astype(np.float32)  # shape (20,)
+
+        K_prop_vec = np.clip(K_prev_vec + deltaK, K_min, K_max)
+
+        # 5) 速率限制（可选）：每步最多变化 self.rate_limit
+        if hasattr(self, "rate_limit") and self.rate_limit is not None:
+            dK = np.clip(K_prop_vec - K_prev_vec, -self.rate_limit, self.rate_limit)
+            K_rate_limited = K_prev_vec + dK
+        else:
+            K_rate_limited = K_prop_vec
+
+        # 6) 一阶平滑（可选）
+        alpha = getattr(self, "alpha", 1.0)  # 1.0 表示不平滑，直接采用
+        alpha = float(np.clip(alpha, 1e-6, 1.0))
+        K_new_vec = (1.0 - alpha) * K_prev_vec + alpha * K_rate_limited
+
+        # 7) 将 1x20 的向量解包回各环（保持你原先 8 组的切片规则）
+        # 切片区间与原 action 对齐：
+        pos_P_from_vec = K_new_vec[0:2]
+        vel_P_from_vec = K_new_vec[2:4]
+        vel_I_from_vec = K_new_vec[4:6]
+        vel_D_from_vec = K_new_vec[6:8]
+        att_P_from_vec = K_new_vec[8:11]
+        rate_P_from_vec = K_new_vec[11:14]
+        rate_I_from_vec = K_new_vec[14:17]
+        rate_D_from_vec = K_new_vec[17:20]
+
+        # 8) XY 共用参数展开为三轴（与你原逻辑保持一致）
+        pos_P_gains = (pos_P_from_vec[0], pos_P_from_vec[0], pos_P_from_vec[1])  # X=Y=pos_P[0], Z=pos_P[1]
+        vel_P_gains = (vel_P_from_vec[0], vel_P_from_vec[0], vel_P_from_vec[1])
+        vel_I_gains = (vel_I_from_vec[0], vel_I_from_vec[0], vel_I_from_vec[1])
+        vel_D_gains = (vel_D_from_vec[0], vel_D_from_vec[0], vel_D_from_vec[1])
+        att_P_gains = tuple(att_P_from_vec.tolist())
+        rate_P_gains = tuple(rate_P_from_vec.tolist())
+        rate_I_gains = tuple(rate_I_from_vec.tolist())
+        rate_D_gains = tuple(rate_D_from_vec.tolist())
 
         gains_from_action = {
             'pos_P_gains': pos_P_gains,
@@ -595,7 +750,13 @@ class QuadcopterEnv(gym.Env):
             'rate_I_gains': rate_I_gains,
             'rate_D_gains': rate_D_gains,
         }
+
+        # 9) 应用到控制器
         self.ctrl.update_gains(gains_from_action)
+
+        # 10) 保存当前增益为下次的 prev（用于增量、平滑和速率限制）
+        self.pid_K_prev = gains_from_action
+        return gains_from_action
 
     # =========================
     # 观测
@@ -888,11 +1049,14 @@ class QuadcopterEnv(gym.Env):
     # =========================
     def _is_out_of_bounds(self) -> bool:
         """位置/姿态越界判定"""
-        if self.quad.pos[2] > 10.0 or self.quad.pos[2] < -10.0:
+        if self.quad.pos[2] > 100.0 or self.quad.pos[2] < -100.0:
+            # print("Out of bounds: Altitude exceeded limits.")
             return True
-        if np.abs(self.quad.pos[0]) > 20.0 or np.abs(self.quad.pos[1]) > 20.0:
+        if np.abs(self.quad.pos[0]) > 200.0 or np.abs(self.quad.pos[1]) > 200.0:
+            # print("Out of bounds: Position exceeded limits.")
             return True
         if np.abs(self.quad.euler[0]) > np.pi/2 or np.abs(self.quad.euler[1]) > np.pi/2:
+            # print("Out of bounds: Attitude exceeded 90 degrees.")
             return True
         return False
 
@@ -981,14 +1145,6 @@ class QuadcopterEnv(gym.Env):
         obs1d = as1d(obs)
         act1d = as1d(action)
         rew_val = None if reward is None else float(np.asarray(reward).reshape(()))
-
-        # #检查 action 和 reward 是否为None
-        # if not getattr(self, "_debug_once", False):
-        #     print("[render init] act1d:",
-        #         None if act1d is None else (type(act1d), getattr(act1d, "shape", None), act1d[:5]),
-        #         "rew_val:", rew_val)
-        #     print("[render init] rd type:", type(getattr(self, "render_data", None)))
-        #     self._debug_once = True
 
         # ---------- 2) 从 obs 中取出 8 组 3D ----------
         def take3(x):
