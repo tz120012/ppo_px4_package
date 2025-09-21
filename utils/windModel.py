@@ -37,9 +37,11 @@ class Wind:
                 # Wind Velocity
                 velW_max = args[1]   # m/s
                 velW_min = args[2]   # m/s
+                
                 # Wind Heading
                 qW1_max  = args[3]   # deg
                 qW1_min  = args[4]   # deg
+
                 # Wind Elevation (positive = upwards wind in NED, positive = downwards wind in ENU)
                 qW2_max  = args[5]   # deg
                 qW2_min  = args[6]   # deg

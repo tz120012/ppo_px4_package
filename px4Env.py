@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 import imageio.v2 as imageio
 
-
+import torch
 import gymnasium as gym
 from gymnasium import spaces
 
@@ -60,17 +60,19 @@ class QuadcopterEnv(gym.Env):
     """
     def __init__(self,
                  control_type: str = "xyz_pos",
-                 trajectory_type: int = 5,
+                 trajectory_type: int = 5,          # 考虑课程学习，需要重新定义trajectory_type
                  yaw_type: int = 3,
+                 averVel: float = 1,                # 0：按固定时间，1：按平均速度
                  max_episode_steps: int = 2000,     # 每个回合的最大步数（以RL步计）
-                 dt: float = 0.005,                  # 仿真积分时间步长（动力学/控制）
-                 rl_dt: float = 0.05,                  # RL决策时间步长（每次step保持action的时长）
+                 dt: float = 0.005,                 # 仿真积分时间步长（动力学/控制）
+                 rl_dt: float = 0.05,               # RL决策时间步长（每次step保持action的时长）
                  target_pos: Optional[np.ndarray] = None,
                  dense_reward_scale: float = 1.0,   # 即时奖励权重缩放
                  wind_type: str = 'None',
-                 wind_strength: float = 2.0,
+                 wind_strength: float = 0.0,
                  test_env_mode: bool = False,      # 测试模式：在 step 末尾写 CSV
-                 render_mode: Optional[str] = None 
+                 render_mode: Optional[str] = None,
+                 curriculum_cfg: Optional[Dict[str, Any]] = None    # 课程学习配置
             ):
 
         """
@@ -80,6 +82,7 @@ class QuadcopterEnv(gym.Env):
             control_type: 控制类型 ("xyz_pos", "xy_vel_z_pos", "xyz_vel")
             trajectory_type: 轨迹选择 (0-13)
             yaw_type: 偏航控制类型 (0-4)
+            averVel: 使用约定时间或使用平均速度计算航点时间 (0: 约定时间, 1: 平均速度)
             max_episode_steps: 每个回合的最大步数（以RL步计）
             rl_dt: RL 决策步长（秒），一个step保持action的时长
             dt: 仿真时间步长（秒）
@@ -89,12 +92,14 @@ class QuadcopterEnv(gym.Env):
             wind_strength: 风力强度
             render_mode: 渲染模式 ('human' 或 'rgb_array')
             test_env_mode: 当为 True 时，step 末尾会将 info 写入 CSV 以便分析
+            curriculum_cfg: 课程学习配置字典
         """
         super(QuadcopterEnv, self).__init__()
         # 环境参数
         self.control_type = control_type
         self.trajectory_type = trajectory_type
         self.yaw_type = yaw_type
+        self.averVel = averVel
         self.max_episode_steps = max_episode_steps
         self.rl_dt = rl_dt
         self.dt = dt
@@ -104,42 +109,41 @@ class QuadcopterEnv(gym.Env):
         self.render_mode = render_mode
         self.dense_reward_scale = float(dense_reward_scale)
         self.test_env_mode = test_env_mode
+        # 控制和轨迹选项
+        self.ctrlOptions = ["xyz_pos", "xy_vel_z_pos", "xyz_vel"]
+        self.curriculum_cfg = curriculum_cfg if curriculum_cfg is not None else {}
 
-        # 新增：渲染模式
+        self.stage_configs = self._build_stage_configs(curriculum_cfg)
+        self.reward_weights_presets = self._build_reward_presets(curriculum_cfg)
+        self.segment_weights_presets = self._build_segment_presets(curriculum_cfg)
+        self.num_stages = len(self.stage_configs)
+        self.init_stage = 4                     # 初始默认课程学习阶段，考虑无课程学习时，默认阶段为4，即直接最高级训练
+        self.current_stage = self.init_stage    # 当前课程阶段索引 current_stage
+
+        # 课程学习相关缩放因子
+        self.delta_K_scale = 1.0    # PID参数增量缩放因子，限制每步动作对PID参数的影响，默认无课程阶段为最大可调整范围        
+        self.rate_limit_scale = 1.0    # 角速度限制缩放因子，默认无课程阶段为最大可调整范围
+
+        # 动作与观测掩码
+        self.open_masks = {
+            "mask_rate_L0": np.array([0,0, 1,1, 1,1, 1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1], dtype=np.float32),
+            "mask_att_L1":  np.array([0,0, 1,1, 1,1, 1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1], dtype=np.float32),
+            "mask_vel_L2":  np.array([1,1, 1,1, 1,1, 1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1], dtype=np.float32),
+            "mask_pos_L3":  np.array([1,1, 1,1, 1,1, 1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1], dtype=np.float32),
+            "mask_all_L4":  np.ones(20, dtype=np.float32),
+        }
+        self._apply_stage_config()          # 应用当前课程阶段配置
+
+        # 渲染模式
         self.render_mode = render_mode
         self._render_inited = False
         self._fig = None
         self._ax = None
 
         # 奖励权重（即时）
-        self.reward_weights = dict(
-            w_pos_xy=0.3,
-            w_pos_z=0.25,
-            w_vel_xy=0.15,
-            w_vel_z=0.1,
-            w_att=0.1,
-            w_omega=0.02,
-        )
-
+        self.reward_weights = None
         # Segment 权重（本步内样本的RMSE/均值聚合）
-        self.segment_weights = dict(
-            W_pos_xy=0.3,
-            W_pos_z=0.25,
-            W_vel_xy=0.15,
-            W_vel_z=0.1,
-            W_att_roll=0.1,
-            W_att_pitch=0.1,
-            W_omega=0.02,
-
-            # 暂时不开启平滑性奖励
-            W_u=0.0,            # 0.05
-            W_dv=0.0,           # 0.06
-            W_domega=0.0,       # 0.07
-            W_du=0.0,           # 0.08
-
-            W_sat=0.15,
-            W_over=0.15
-        )
+        self.segment_weights = None
 
         # 限制与判据
         self.limits = dict(
@@ -156,9 +160,6 @@ class QuadcopterEnv(gym.Env):
         self.current_step = 0
         self.current_substep = 0   # 以仿真子步为单位
         self.episode_reward = 0.0
-
-        # 控制和轨迹选项
-        self.ctrl_options = ["xyz_pos", "xy_vel_z_pos", "xyz_vel"]
 
         # 初始化仿真组件
         self._initialize_simulation()
@@ -184,20 +185,6 @@ class QuadcopterEnv(gym.Env):
             10.0, 10.0, 10.0,   # rate_I_gains
             0.01, 0.01, 0.01    # rate_D_gains
         ])
-
-        scale = np.array([
-            0.25, 0.25,   # pos_P: Pxy, Pz
-            0.25, 0.25,   # vel_P: Pxydot, Pzdot
-            0.08, 0.08,   # vel_I: Ixydot, Izdot
-            0.18, 0.18,   # vel_D: Dxydot, Dzdot
-            0.20, 0.20, 0.20,  # att_P: Pphi, Ptheta, Ppsi
-            0.15, 0.15, 0.15,  # rate_P: Pp, Pq, Pr
-            0.06, 0.06, 0.06,  # rate_I: Ip, Iq, Ir
-            0.12, 0.12, 0.12   # rate_D: Dp, Dq, Dr
-        ], dtype=np.float32)
-
-        range_vec = self.pid_safe_max - self.pid_safe_min
-        self.deltaK_max = scale * range_vec
 
         # 初始化上一时刻增益（基线） 这里用安全范围的中点作为默认基线
         mid = (self.pid_safe_min + self.pid_safe_max) / 2.0
@@ -263,8 +250,8 @@ class QuadcopterEnv(gym.Env):
         """初始化仿真组件"""
         self.time = 0.0
         self.quad = Quadcopter(self.time)
-        traj_select = np.array([self.trajectory_type, self.yaw_type, 1])  # 使用平均速度
-        self.traj = Trajectory(self.quad, ctrlType=self.control_type, trajSelect=traj_select)
+        self.traj_select = np.array([self.trajectory_type, self.yaw_type, self.averVel])  
+        self.traj = Trajectory(self.quad, ctrlType=self.control_type, trajSelect=self.traj_select)
         self.ctrl = Control(self.quad, self.traj.yawType)
         self.wind = Wind(self.wind_type, self.wind_strength, 90, -15)
 
@@ -288,9 +275,6 @@ class QuadcopterEnv(gym.Env):
         self.episode_wMotor_all     = np.zeros((T, len(self.quad.wMotor)))
         self.episode_thr_all        = np.zeros((T, len(self.quad.thr)))
         self.episode_tor_all        = np.zeros((T, len(self.quad.tor)))
-
-        # 课程学习阶段
-        self.stage = 0          # 初始课程学习的阶段
 
         # 子步越界保护标记
         self._force_truncate = False
@@ -445,10 +429,14 @@ class QuadcopterEnv(gym.Env):
         self.step_log_rows = []  # 清空步级日志
         self.last_segment_metrics = None
 
+        # 读取 options 中的课程等级
+        if options and "course_stage" in options:
+            print(f"[Env] Reset with course_stage={options['course_stage']}")
+            self.current_stage = int(options["course_stage"])
+        self._apply_stage_config()          # 应用当前课程阶段配置
+
         if options is not None and 'target_pos' in options:
             self.target_pos = np.array(options['target_pos'])
-
-        self._initialize_simulation()
 
         # 重置初始参数
         mid = (self.pid_safe_min + self.pid_safe_max) / 2.0
@@ -472,7 +460,21 @@ class QuadcopterEnv(gym.Env):
             'rate_I_gains': rate_I_gains,
             'rate_D_gains': rate_D_gains,
         }
+
+        range_vec = self.pid_safe_max - self.pid_safe_min
+        self.deltaK_max = self.delta_K_scale * range_vec
         self.ctrl.update_gains(self.pid_K_prev)
+
+        # 最大速度
+        self.ctrl.velMax *= self.rate_limit_scale
+        self.ctrl.velMaxAll *= self.rate_limit_scale
+        # 最大倾角
+        self.ctrl.tiltMax *= self.rate_limit_scale
+        # 最大角速度
+        self.ctrl.rateMax *= self.rate_limit_scale
+        
+        # 重置仿真组件
+        self._initialize_simulation()        
 
         # 如果是测试环境模式，打开新的 CSV 文件并写表头
         self._close_step_csv()
@@ -494,14 +496,14 @@ class QuadcopterEnv(gym.Env):
 
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """执行一个环境步骤：保持该action在rl_dt时长内，包含多个仿真子步"""
-        self.step_action = self._apply_pid_parameters(action)          # 将参数写入PID控制器
-
+        # 如果 action 是 torch tensor，则转换为 numpy
         try:
-            import torch
             if isinstance(action, torch.Tensor):
                 action = action.detach().cpu().numpy()
         except Exception:
             pass
+
+        self.step_action = self._apply_pid_parameters(action)          # 将参数写入PID控制器
 
         # 需要运行的仿真子步数量
         substeps = max(1, int(round(self.rl_dt / self.dt)))     # 计算每个Step 需要多少个仿真子步
@@ -715,8 +717,7 @@ class QuadcopterEnv(gym.Env):
             K_rate_limited = K_prop_vec
 
         # 6) 一阶平滑（可选）
-        alpha = getattr(self, "alpha", 1.0)  # 1.0 表示不平滑，直接采用
-        alpha = float(np.clip(alpha, 1e-6, 1.0))
+        alpha = 0.8  # 1.0 表示不平滑，直接采用 前一个step的PID参数+action(PID增量)
         K_new_vec = (1.0 - alpha) * K_prev_vec + alpha * K_rate_limited
 
         # 7) 将 1x20 的向量解包回各环（保持你原先 8 组的切片规则）
@@ -790,10 +791,8 @@ class QuadcopterEnv(gym.Env):
     #     return np.concatenate([obs, action, reward], axis=0)
     
     def _pack_render_data(self, obs, action=None, reward=None):
-        import numpy as np
         # 统一类型
         try:
-            import torch
             if action is not None and isinstance(action, torch.Tensor):
                 action = action.detach().cpu().numpy()
             if reward is not None and isinstance(reward, torch.Tensor):
@@ -1049,12 +1048,12 @@ class QuadcopterEnv(gym.Env):
     # =========================
     def _is_out_of_bounds(self) -> bool:
         """位置/姿态越界判定"""
-        if self.quad.pos[2] > 100.0 or self.quad.pos[2] < -100.0:
-            # print("Out of bounds: Altitude exceeded limits.")
-            return True
-        if np.abs(self.quad.pos[0]) > 200.0 or np.abs(self.quad.pos[1]) > 200.0:
-            # print("Out of bounds: Position exceeded limits.")
-            return True
+        # if self.quad.pos[2] > 100.0 or self.quad.pos[2] < -100.0:
+        #     # print("Out of bounds: Altitude exceeded limits.")
+        #     return True
+        # if np.abs(self.quad.pos[0]) > 200.0 or np.abs(self.quad.pos[1]) > 200.0:
+        #     # print("Out of bounds: Position exceeded limits.")
+        #     return True
         if np.abs(self.quad.euler[0]) > np.pi/2 or np.abs(self.quad.euler[1]) > np.pi/2:
             # print("Out of bounds: Attitude exceeded 90 degrees.")
             return True
@@ -1085,36 +1084,176 @@ class QuadcopterEnv(gym.Env):
     # =========================
     # 课程学习相关
     # =========================
-    def set_course_stage(self, stage:int):
-        """根据课程阶段设置新的控制类型和轨迹类型"""
-        if stage == 0:
-            self.control_type = "xyz_pos"
-            self.trajectory_type = 0
-        elif stage == 1:
-            self.control_type = "xyz_pos"
-            self.trajectory_type = 1
-        elif stage == 2:
-            self.control_type = "xyz_pos"
-            self.trajectory_type = 2
-        elif stage == 3:
-            self.control_type = "xyz_pos"
-            self.trajectory_type = 3
-        elif stage == 4:
-            self.control_type = "xyz_pos"
-            self.trajectory_type = 4
+
+    def _build_stage_configs(self, curriculum_cfg):
+        if curriculum_cfg is not None:
+            return curriculum_cfg["stage_configs"]
+        # 配置列表
+        return [
+            dict(  # L0: rate P/D 优先              # 速度随机阶跃
+                control_type = self.ctrlOptions[1],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
+                trajectory_type=201,                # 当control_type = 1时，trajectory_type = 0: rate
+                yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
+                averVel =  0,                       # 0：使用约定时间，1：使用平均速度                  
+                reward_preset="rate_L0",            # 调整奖励权重，不同的课程等级重点奖励位置不同
+                open_mask_name="mask_rate_L0",      # 调整开放的PID参数，不同的课程等级开放不同的参数
+                delta_k_scale = 0.5,                # PID参数增量缩放,用于限制每步动作对PID参数的影响
+                rate_limit_scale=0.5,               # 速率限制缩放,用于限制最大速度/最大角速度
+                wind_type = 'None',                 # 风类型：0无风，1恒定风，2随机风
+                wind_velocity=0.0,                  # 用于调整风速大小
+                notes="stabilize rate loop; minimal disturbance",
+            ),
+            dict(  # L1: + att P，小风              # 速度扫频扫幅
+                control_type = self.ctrlOptions[1],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
+                trajectory_type = 202,              # 当control_type = 1时，trajectory_type = 1: attitude
+                yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
+                averVel =  0,                       # 0：使用约定时间，1：使用平均速度                   
+                reward_preset="att_L1",
+                open_mask_name="mask_att_L1",
+                delta_k_scale = 0.5,       
+                rate_limit_scale=0.5,
+                wind_type = 'FIXED',                
+                wind_velocity=1.0,
+                notes="enable attitude P; light wind",
+            ),
+            dict(  # L2: + vel P/D（可选 I），中风  # 8字航线
+                control_type = self.ctrlOptions[0],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
+                trajectory_type=101,                # 当control_type = 1时，trajectory_type = 2: velocity
+                yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
+                averVel =  1,                       # 0：使用约定时间，1：使用平均速度                   
+                reward_preset="vel_L2",
+                open_mask_name="mask_vel_L2",
+                delta_k_scale = 0.8,                       
+                rate_limit_scale=0.8,
+                wind_type = 'FIXED',
+                wind_velocity=2.0,
+                notes="enable velocity loop; moderate wind",
+            ),
+            dict(  # L3: + pos P，中强风            #复杂航线
+                control_type = self.ctrlOptions[0],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
+                trajectory_type=102,                # trajectory_type = 5: minimum jerk, circle/figure-8
+                yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
+                averVel =  1,                       # 0：使用约定时间，1：使用平均速度                      
+                reward_preset="pos_L3",
+                open_mask_name="mask_pos_L3",
+                delta_k_scale = 0.8,       
+                rate_limit_scale=0.8,
+                wind_type = 'SINE',
+                wind_velocity=3.0,
+                notes="enable position loop; circle/figure-8",
+            ),
+            dict(  # L4: 全开，强风/突风            # 随机轨迹
+                control_type = self.ctrlOptions[0],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
+                trajectory_type=103,                # trajectory_type = 5: minimum jerk, 
+                yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
+                averVel =  1,                       # 0：使用约定时间，1：使用平均速度                   
+                reward_preset="all_L4",
+                open_mask_name="mask_all_L4",
+                delta_k_scale = 1.0,      
+                rate_limit_scale=1.0,
+                wind_type = 'SINE',
+                wind_velocity=3.0,
+                notes="full 20-dim open; strong wind/gusts",
+            ),
+        ]
+
+    def _build_reward_presets(self, curriculum_cfg):
+        """构建 reward_weights 的预设表：键为 preset 名称，值为权重字典。"""
+        if curriculum_cfg is not None and "reward_weights_presets" in curriculum_cfg:
+            return curriculum_cfg["reward_weights_presets"]
+
+        return {
+            "rate_L0": dict(
+                w_pos_xy=0.3/3, w_pos_z=0.25, w_vel_xy=0.15, w_vel_z=0.1, w_att=0.1, w_omega=0.02
+            ),
+            "att_L1": dict(
+                w_pos_xy=0.3/3, w_pos_z=0.25, w_vel_xy=0.15, w_vel_z=0.1, w_att=0.1, w_omega=0.02
+            ),
+            "vel_L2": dict(
+                w_pos_xy=0.3, w_pos_z=0.25, w_vel_xy=0.15, w_vel_z=0.1, w_att=0.1, w_omega=0.02
+            ),
+            "pos_L3": dict(
+                w_pos_xy=0.3, w_pos_z=0.25, w_vel_xy=0.15, w_vel_z=0.1, w_att=0.1, w_omega=0.02
+            ),
+            "all_L4": dict(
+                w_pos_xy=0.3, w_pos_z=0.25, w_vel_xy=0.15, w_vel_z=0.1, w_att=0.1, w_omega=0.02
+            ),
+        }
+    
+    def _build_segment_presets(self, curriculum_cfg):
+        """构建 segment_weights 的预设表：键为 preset 名称，值为权重字典。"""
+        if curriculum_cfg is not None and "segment_weights_presets" in curriculum_cfg:
+            return curriculum_cfg["segment_weights_presets"]
+
+        return {
+            "rate_L0": dict(
+                W_pos_xy=0.3/3, W_pos_z=0.25, W_vel_xy=0.15, W_vel_z=0.1,
+                W_att_roll=0.1, W_att_pitch=0.1, W_omega=0.02,
+                W_u=0.0, W_dv=0.0, W_domega=0.0, W_du=0.0,              # 控制能量与平滑不纳入奖励(暂不开启) / W_u=0.05, W_dv=0.06, W_domega=0.07, W_du=0.08,
+                W_sat=0.15, W_over=0.15,
+            ),
+            "att_L1": dict(
+                W_pos_xy=0.3/3, W_pos_z=0.25, W_vel_xy=0.15, W_vel_z=0.1,
+                W_att_roll=0.1, W_att_pitch=0.1, W_omega=0.02,
+                W_u=0.0, W_dv=0.0, W_domega=0.0, W_du=0.0,              # 控制能量与平滑不纳入奖励(暂不开启) / W_u=0.05, W_dv=0.06, W_domega=0.07, W_du=0.08,
+                W_sat=0.15, W_over=0.15,
+            ),
+            "vel_L2": dict(
+                W_pos_xy=0.3, W_pos_z=0.25, W_vel_xy=0.15, W_vel_z=0.1,
+                W_att_roll=0.1, W_att_pitch=0.1, W_omega=0.02,
+                W_u=0.0, W_dv=0.0, W_domega=0.0, W_du=0.0,              # 控制能量与平滑不纳入奖励(暂不开启) / W_u=0.05, W_dv=0.06, W_domega=0.07, W_du=0.08,
+                W_sat=0.15, W_over=0.15,
+            ),
+            "pos_L3": dict(
+                W_pos_xy=0.3, W_pos_z=0.25, W_vel_xy=0.15, W_vel_z=0.1,
+                W_att_roll=0.1, W_att_pitch=0.1, W_omega=0.02,
+                W_u=0.0, W_dv=0.0, W_domega=0.0, W_du=0.0,              # 控制能量与平滑不纳入奖励(暂不开启) / W_u=0.05, W_dv=0.06, W_domega=0.07, W_du=0.08,
+                W_sat=0.15, W_over=0.15,
+            ),
+            "all_L4": dict(
+                W_pos_xy=0.3, W_pos_z=0.25, W_vel_xy=0.15, W_vel_z=0.1,
+                W_att_roll=0.1, W_att_pitch=0.1, W_omega=0.02,
+                W_u=0.0, W_dv=0.0, W_domega=0.0, W_du=0.0,              # 控制能量与平滑不纳入奖励(暂不开启) / W_u=0.05, W_dv=0.06, W_domega=0.07, W_du=0.08,
+                W_sat=0.15, W_over=0.15,
+            ),
+        }
+
+    def _apply_stage_config(self):
+        """根据课程阶段调整环境参数"""
+        cfg = self.stage_configs[self.current_stage]
+
+        # a) 设置 trajectory_type 并重建/重置 Trajectory
+        self.control_type = cfg.get("control_type", 0)
+        self.trajectory_type = cfg.get("trajectory_type", 5)
+        self.yaw_type = cfg.get("yaw_type", 3)
+        self.averVel = cfg.get("averVel", 1)
+
+        # b) 按 reward_preset设置奖励权重
+        reward_preset = cfg.get("reward_preset")
+        if reward_preset is not None:
+            self.reward_weights = dict(self.reward_weights_presets[reward_preset])
+            self.segment_weights = dict(self.segment_weights_presets[reward_preset])
         else:
-            raise ValueError(f"Invalid course stage: {stage}")
+            self.reward_weights = dict(self.reward_weights_presets["all_L4"])
+            self.segment_weights = dict(self.reward_weights_presets["all_L4"])
 
-        self.stage = int(stage)
+        # c) 设置 open_mask
+        mask_name = cfg.get("open_mask_name")
+        if mask_name in self.open_masks:
+            self.open_mask = self.open_masks[mask_name].copy()
+        else:
+            self.open_mask = self.open_mask["mask_all_L4"].copy()
 
-        logging.info(f"Course stage set to {self.stage}: control_type={self.control_type}, trajectory_type={self.trajectory_type}")
+        # d) 应用 delta_K_scale 和 rate_limit
+        self.delta_K_scale = cfg.get("delta_k_scale", 0.5)
+        self.rate_limit_scale = cfg.get("rate_limit_scale", 0.5)
 
-        # 应用到轨迹/控制器（不重置时间）
-        traj_select = np.array([self.trajectory_type, self.yaw_type, 1])
-        self.traj = Trajectory(self.quad, ctrlType=self.control_type, trajSelect=traj_select)
-        self.ctrl = Control(self.quad, self.traj.yawType)
-        sDes = self.traj.desiredState(self.time, self.dt, self.quad)
-        self.ctrl.controller(self.traj, self.quad, sDes, self.dt)
+        # e) 应用 wind_velocity
+
+        self.wind_type = cfg.get("wind_type", 'NONE')
+        self.wind_strength = cfg.get("wind_velocity", 0.0)
+
+        self.curriculum_cfg = cfg
 
     # =========================
     # 渲染与关闭

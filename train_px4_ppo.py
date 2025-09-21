@@ -74,7 +74,7 @@ def get_args() -> argparse.Namespace:
                         help="Reward normalization")
     parser.add_argument("--vf-coef", type=float, default=0.5,
                         help="Value function coefficient")
-    parser.add_argument("--ent-coef", type=float, default=0.02,             
+    parser.add_argument("--ent-coef", type=float, default=0.01,             
                         help="Entropy coefficient")
     parser.add_argument("--gae-lambda", type=float, default=0.95,
                         help="GAE lambda")
@@ -92,7 +92,7 @@ def get_args() -> argparse.Namespace:
                         help="Enable curriculum learning")
     parser.add_argument("--curriculum-stages", type=int, default=5,
                         help="Number of curriculum stages")
-    parser.add_argument("--stage-threshold", type=float, default=0.75,
+    parser.add_argument("--stage-threshold", type=dict, default=None,
                         help="Success rate threshold to advance stage")
     
     # 日志和保存
@@ -175,41 +175,101 @@ def make_px4_env(
 class CurriculumManager:
     """课程学习管理器"""
     
-    def __init__(self, num_stages: int = 5, threshold: float = 0.75):
+    def __init__(self, 
+                 num_stages: int = 5, 
+                 threshold: dict | None = None,
+                 window_size: int = 5,
+                 min_pass_count: int = 2,
+                 cooldown_epochs: int = 1,  # 升级后的冷却期，防止频繁升级
+                 start_stage: int = 0,
+                 ) -> None:
+        # 阶段数与索引
         self.num_stages = num_stages
-        self.threshold = threshold
-        self.current_stage = 0
-        self.stage_performance = []
+        self.current_stage = int(start_stage)
+        self.last_advance_epoch = -10**9  # 初始化为负值以允许立即升级
+
+        # 评估与判据
+        self.window_size = int(window_size)
+        self.min_pass_count = int(min_pass_count)
+        self.cooldown_epochs = int(cooldown_epochs)
+
+        self.thresholds = threshold or {
+            0:-10000,         # L0 进阶阈值
+            1:-10000,         # L1 进阶阈值
+            2:-10000,         # L2 进阶阈值
+            3:-10000,         # L3 进阶阈值
+            4:-10000,         # L4 进阶阈值
+        }
         
-        # 定义每个阶段的配置
-        self.stage_configs = [
-            {"trajectory_type": 0, "control_type": "xyz_pos"},  # 悬停
-            {"trajectory_type": 1, "control_type": "xyz_pos"},  # 简单圆形
-            {"trajectory_type": 2, "control_type": "xyz_pos"},  # 8字形
-            {"trajectory_type": 3, "control_type": "xyz_pos"},  # 螺旋
-            {"trajectory_type": 5, "control_type": "xyz_pos"},  # 复杂轨迹
-        ]
-    
-    def should_advance(self, success_rate: float) -> bool:
-        """判断是否应该进入下一阶段"""
-        self.stage_performance.append(success_rate)
-        if success_rate >= self.threshold and self.current_stage < self.num_stages - 1:
-            return True
-        return False
-    
-    def advance_stage(self) -> dict:
-        """进入下一阶段"""
+        # 记录评估历史
+        self.eval_history: list[float] = []         # 单次评估分数
+        self.window_buffer: list[float] = []        # 滑动窗口内的评估分数
+        self.pass_streak: int = 0                   # 连续达标次数
+        
+
+    # 将一次评估结果（average reward）送入
+    def push_eval_score(self, score: float) -> None:
+        self.eval_history.append(float(score))
+        self.window_buffer.append(float(score))
+        if len(self.window_buffer) > self.window_size:
+            self.window_buffer.pop(0)
+
+    # 计算滑动窗口内的平均分
+    def get_window_average(self) -> float | None:
+        if not self.window_buffer:
+            return None
+        return sum(self.window_buffer) / len(self.window_buffer)
+
+    def should_advance(self, epoch: int) -> bool:
+        """基于滑动窗口 + 连续达标 + 冷却期判断是否升级"""
+        # 冷却期
+        if (epoch - self.last_advance_epoch) < self.cooldown_epochs:
+            return False
+        # 需要有窗口均值
+        avg = self.get_window_average()
+        if avg is None:
+            return False
+        # 当前阶段阈值
+        thr = self.thresholds.get(self.current_stage, None)
+        if thr is None:
+            return False
+
+        # 判据：窗口均值 >= 阈值 -> streak +1，否则清零
+        if avg >= thr:
+            self.pass_streak += 1
+        else:
+            self.pass_streak = 0
+
+        return (self.pass_streak >= self.min_pass_count) and (self.current_stage < self.num_stages - 1)
+
+    def advance_stage(self, epoch: int) -> dict:
         self.current_stage = min(self.current_stage + 1, self.num_stages - 1)
-        return self.get_current_config()
-    
-    def get_current_config(self) -> dict:
-        """获取当前阶段配置"""
-        return self.stage_configs[self.current_stage]
-    
+        self.last_advance_epoch = int(epoch)
+        self.pass_streak = 0
+
+    # def get_current_config(self) -> dict:
+    #     # 返回当前阶段配置的副本，并附带 stage 索引
+    #     cfg = dict(self.stage_configs[self.current_stage])
+    #     cfg["stage"] = self.current_stage
+    #     return cfg
+
+    def get_stage_index(self) -> int:
+        return self.current_stage
+
+    # def as_env_options(self) -> dict:
+    #     """用于 env.reset(options=...) 注入"""
+    #     cfg = self.get_current_config()
+    #     # 仅传必要字段，避免与 Env 定义不一致
+    #     keys = ["stage", "trajectory_type", "reward_preset", "open_mask_name",
+    #             "delta_scale", "rate_limit_scale", "alpha", "wind_scale"]
+    #     return {k: cfg[k] for k in keys if k in cfg}
+
     def reset(self):
-        """重置课程进度"""
         self.current_stage = 0
-        self.stage_performance = []
+        self.eval_history.clear()
+        self.window_buffer.clear()
+        self.pass_streak = 0
+        self.last_advance_epoch = -10**9  # 允许立即升级
 
 
 def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
@@ -365,6 +425,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         config_dict=vars(args),     # Tensorboard/W&B 记录所有超参配置，便于复现
     )
     
+
     # 课程学习管理器
     curriculum_manager = None
     if args.use_curriculum:
@@ -375,34 +436,30 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         print("Curriculum learning enabled")
       
     # 自定义训练函数（用于课程学习）
+    # -------------------------------------
     def train_fn(epoch: int, env_step: int) -> None:
         """在每个epoch开始时调用"""
-        if curriculum_manager is not None and epoch > 0:
-            # 获取最近的测试性能
-            if hasattr(test_collector, 'last_rew'):
-                avg_reward = test_collector.last_rew
-                # 简单的成功判据：平均奖励超过某个阈值
-                success_rate = min(1.0, max(0.0, (avg_reward + 500) / 1000))
-                
-                if curriculum_manager.should_advance(success_rate):
-                    _ = curriculum_manager.advance_stage()
-                    
-                    # 更新训练环境配置（假设 env wrapper 暴露了 set_course_stage）
-                    # 注意：VectorEnv 需要通过 envs 属性访问底层 env
-                    try:
-                        if hasattr(train_envs, "envs"):
-                            for e in train_envs.envs:
-                                if hasattr(e, 'set_course_stage'):
-                                    e.set_course_stage(curriculum_manager.current_stage)
-                        else:
-                            # DummyVectorEnv with lambda: base_env
-                            base = train_envs
-                            if hasattr(base, "envs"):
-                                for e in base.envs:
-                                    if hasattr(e, 'set_course_stage'):
-                                        e.set_course_stage(curriculum_manager.current_stage)
-                    except Exception as ex:
-                        print(f"Failed to update course stage on train envs: {ex}")
+
+        # 1) 记录评估结果
+        avg_reward = trainer.last_rew           # 找不到test_collector的eval结果，只能用trainer的last_rew
+        if avg_reward is None:
+            print(f"Epoch {epoch}: no eval reward available yet")
+            return
+        curriculum_manager.push_eval_score(avg_reward)
+
+        # 2) 判断是否升级
+        if curriculum_manager.should_advance(epoch):
+            curriculum_manager.advance_stage(epoch)
+            new_stage = curriculum_manager.get_stage_index()
+            print(f"[Curriculum] advance to stage {new_stage} \n")
+
+            # 3) 更新训练环境配置
+            try:
+                train_collector.reset_env(gym_reset_kwargs={"options": {"course_stage": new_stage}})
+            except Exception as ex:
+                print(f"[Curriculum] Failed to update course stage on train envs: {ex}")
+
+
 
     # 保存最佳策略函数
     def save_best_fn(policy: BasePolicy) -> None:

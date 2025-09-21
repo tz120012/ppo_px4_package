@@ -100,6 +100,7 @@ class Control:
         # Select Controller
         # ---------------------------
         if (traj.ctrlType == "xyz_vel"):
+            print("Using xyz_vel controller")
             self.saturateVel()
             self.z_vel_control(quad, Ts)
             self.xy_vel_control(quad, Ts)
@@ -396,4 +397,3 @@ class Control:
             
         # 更新偏航权重（基于新的姿态增益）
         self.setYawWeight()
-

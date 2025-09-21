@@ -275,6 +275,14 @@ v1.2.0 实现远距离waypoint，和高速 的航迹跟随，改进角速率跟�
           ->总速度：5->20
       航点：x,y,z放大10倍
       平均速度：1.6m/s -> 8m/s
+v1.2.0 实现 课程学习
+      stage1：慢速，小位置移动
+      stage2：
+
+python train_px4_ppo.py --use-curriculum=True
+
+
+
 
 v2.1.0 基于tianshou(ppo) + PX4 + Gazebo 实现模拟在线强化学习功能；
 v2.2.0 基于tianshou(ppo) + PX4 + Gazebo 实现手动控制测试，航线跟踪飞行测试
