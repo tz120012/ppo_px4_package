@@ -33,67 +33,49 @@ def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PPO for PX4 Quadcopter PID Optimization")
     
     # 环境相关参数
-    parser.add_argument("--control-type", type=str, default="xyz_pos",
-                        choices=["xyz_pos", "xy_vel_z_pos", "xyz_vel"],
-                        help="Control mode for the quadcopter")
-    parser.add_argument("--trajectory-type", type=int, default=5,
-                        help="Trajectory type (0-13)")
-    parser.add_argument("--yaw-type", type=int, default=3,
-                        help="Yaw control type (0-4)")
-    parser.add_argument("--max-episode-steps", type=int, default=2000,
-                        help="Maximum steps per episode")
-    parser.add_argument("--rl-dt", type=float, default=0.05,
-                        help="RL decision timestep (seconds)")
-    parser.add_argument("--sim-dt", type=float, default=0.005,
-                        help="Simulation timestep (seconds)")
-    parser.add_argument("--wind-type", type=str, default="None",
-                        help="Wind disturbance type")
-    parser.add_argument("--wind-strength", type=float, default=2.0,
-                        help="Wind strength")
-    parser.add_argument("--dense-reward-scale", type=float, default=0.1,                    # 即时奖励系数默认为0.1
-                        help="Scale factor for dense reward terms in environment")
-    parser.add_argument("--test-env-mode", action="store_true", default=False,              # 测试环境默认为False，记录step的info数据
-                        help="Enable single-env mode and write per-step info to CSV within env.step")
+    parser.add_argument("--control-type", type=str, default="xyz_pos", choices=["xyz_pos", "xy_vel_z_pos", "xyz_vel"], help="Control mode for the quadcopter")
+    parser.add_argument("--trajectory-type", type=int, default=5, help="Trajectory type (0-13)")
+    parser.add_argument("--yaw-type", type=int, default=3, help="Yaw control type (0-4)")
+    parser.add_argument("--max-episode-steps", type=int, default=2000, help="Maximum steps per episode")
+    parser.add_argument("--rl-dt", type=float, default=0.05, help="RL decision timestep (seconds)")
+    parser.add_argument("--sim-dt", type=float, default=0.005, help="Simulation timestep (seconds)")
+    parser.add_argument("--wind-type", type=str, default="None", help="Wind disturbance type")
+    parser.add_argument("--wind-strength", type=float, default=0.0, help="Wind strength")
+    parser.add_argument("--dense-reward-scale", type=float, default=0.1, help="Scale factor for dense reward terms in environment")
+    parser.add_argument("--test-env-mode", action="store_true", default=False, help="Enable single-env mode and write per-step info to CSV within env.step")  # 测试环境默认为False，记录step的info数据
 
     # 训练参数
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--buffer-size", type=int, default=4096)
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])
-    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--epoch", type=int, default=100)
     parser.add_argument("--step-per-epoch", type=int, default=16384)
     parser.add_argument("--step-per-collect", type=int, default=4096)
-    parser.add_argument("--repeat-per-collect", type=int, default=6)        # 每次收集后重复更新6次，10次就太稳了
-    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--repeat-per-collect", type=int, default=3)        # 每次收集后重复更新6次，10次就太稳了
+    parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--training-num", type=int, default=8)
     parser.add_argument("--test-num", type=int, default=8)
     
     # PPO特定参数
-    parser.add_argument("--rew-norm", type=int, default=1,
-                        help="Reward normalization")
-    parser.add_argument("--vf-coef", type=float, default=0.5,
-                        help="Value function coefficient")
-    parser.add_argument("--ent-coef", type=float, default=0.01,             
-                        help="Entropy coefficient")
-    parser.add_argument("--gae-lambda", type=float, default=0.95,
-                        help="GAE lambda")
+    parser.add_argument("--rew-norm", type=int, default=1, help="Reward normalization")
+    parser.add_argument("--vf-coef", type=float, default=0.3, help="Value function coefficient")
+    parser.add_argument("--ent-coef", type=float, default=0.003, help="Entropy coefficient")
+    parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda")
     parser.add_argument("--bound-action-method", type=str, default="clip")
     parser.add_argument("--lr-decay", type=int, default=1)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
-    parser.add_argument("--eps-clip", type=float, default=0.2)
+    parser.add_argument("--eps-clip", type=float, default=0.12)
     parser.add_argument("--dual-clip", type=float, default=None)
     parser.add_argument("--value-clip", type=int, default=1)
     parser.add_argument("--norm-adv", type=int, default=1)
     parser.add_argument("--recompute-adv", type=int, default=1)
     
     # 课程学习参数
-    parser.add_argument("--use-curriculum", action="store_true", default=False,
-                        help="Enable curriculum learning")
-    parser.add_argument("--curriculum-stages", type=int, default=5,
-                        help="Number of curriculum stages")
-    parser.add_argument("--stage-threshold", type=dict, default=None,
-                        help="Success rate threshold to advance stage")
+    parser.add_argument("--use-curriculum", action="store_true", default=False, help="Enable curriculum learning")
+    parser.add_argument("--curriculum-stages", type=int, default=5, help="Number of curriculum stages")
+    parser.add_argument("--stage-threshold", type=dict, default=None, help="Success rate threshold to advance stage")
     
     # 日志和保存
     parser.add_argument("--logdir", type=str, default="log_px4")
@@ -247,22 +229,8 @@ class CurriculumManager:
         self.last_advance_epoch = int(epoch)
         self.pass_streak = 0
 
-    # def get_current_config(self) -> dict:
-    #     # 返回当前阶段配置的副本，并附带 stage 索引
-    #     cfg = dict(self.stage_configs[self.current_stage])
-    #     cfg["stage"] = self.current_stage
-    #     return cfg
-
     def get_stage_index(self) -> int:
         return self.current_stage
-
-    # def as_env_options(self) -> dict:
-    #     """用于 env.reset(options=...) 注入"""
-    #     cfg = self.get_current_config()
-    #     # 仅传必要字段，避免与 Env 定义不一致
-    #     keys = ["stage", "trajectory_type", "reward_preset", "open_mask_name",
-    #             "delta_scale", "rate_limit_scale", "alpha", "wind_scale"]
-    #     return {k: cfg[k] for k in keys if k in cfg}
 
     def reset(self):
         self.current_stage = 0
@@ -301,6 +269,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
     print(f"Observations shape: {args.state_shape}")
     print(f"Actions shape: {args.action_shape}")
     print(f"Action range: [{args.min_action}, {args.max_action}]")
+    print(f"Device: {args.device}")
     
     # 设置随机种子
     np.random.seed(args.seed)
