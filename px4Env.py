@@ -216,7 +216,7 @@ class QuadcopterEnv(gym.Env):
         # 定义动作空间（所有PID参数值）
         # 参数顺序: [0-7]位置P/速度PID, [8-10]姿态P, [11-19]角速率PID
         self.action_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(20,), dtype=np.float32
+            low=0.0, high=1.0, shape=(20,), dtype=np.float32
         )
 
         # 定义观测空间
@@ -497,17 +497,11 @@ class QuadcopterEnv(gym.Env):
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """执行一个环境步骤：保持该action在rl_dt时长内，包含多个仿真子步"""
         # 如果 action 是 torch tensor，则转换为 numpy
-        try:
-            if isinstance(action, torch.Tensor):
-                action = action.detach().cpu().numpy()
-        except Exception:
-            pass
-
         self.step_action = self._apply_pid_parameters(action)          # 将参数写入PID控制器
 
         # 需要运行的仿真子步数量
         substeps = max(1, int(round(self.rl_dt / self.dt)))     # 计算每个Step 需要多少个仿真子步
-        step_reward_dense_sum = 0.0                             # 聚合该RL step内的即时奖励（dense）
+        # step_reward_dense_sum = 0.0                             # 聚合该RL step内的即时奖励（dense）
 
         step_samples: List[Dict[str, float]] = []
         prev_cache = {"vel": None, "omega": None, "w_cmd": None}
@@ -535,9 +529,9 @@ class QuadcopterEnv(gym.Env):
             sDesclc = self.ctrl.sDesCalc
             m = self._extract_metrics(sDesclc)
 
-            # 即时奖励（dense，细粒度，引导稳定）
-            dense_r = self._dense_reward_instant(m)
-            step_reward_dense_sum += dense_r
+            # # 即时奖励（dense，细粒度，引导稳定）
+            # dense_r = self._dense_reward_instant(m)
+            # step_reward_dense_sum += dense_r
 
             # 收集本步样本
             sample = self._collect_step_sample(m, prev_cache)
@@ -553,14 +547,15 @@ class QuadcopterEnv(gym.Env):
 
         # step奖励 = 平均即时dense + 分段奖励（本步内聚合）
         # 即时奖励
-        dense_mean = step_reward_dense_sum / max(1, executed_substeps)
+        # dense_mean = step_reward_dense_sum / max(1, executed_substeps)
 
         # 本步分段奖励
         segment_reward, metrics = self._compute_segment_reward_step(step_samples)
         self.last_segment_metrics = metrics if metrics else self.last_segment_metrics
         
         # 合成当步总奖励
-        reward = dense_mean + segment_reward  
+        # reward = dense_mean + segment_reward  
+        reward = segment_reward 
 
         # 终止/截断判定
         # 1) 达到最大步数 -> terminated
@@ -591,7 +586,7 @@ class QuadcopterEnv(gym.Env):
             "step": int(self.current_step),
             "time_end": float(self.time),
             "executed_substeps": int(executed_substeps),
-            "dense_mean": float(dense_mean),
+            # "dense_mean": float(dense_mean),
             "segment_reward": float(segment_reward),
             "total_reward": float(reward),
             "dense_scale": float(self.dense_reward_scale),
@@ -603,13 +598,16 @@ class QuadcopterEnv(gym.Env):
                 "rmse_pos_z": metrics.get("rmse_pos_z", 0.0),
                 "rmse_vel_xy": metrics.get("rmse_vel_xy", 0.0),
                 "rmse_vel_z": metrics.get("rmse_vel_z", 0.0),
-                "rmse_att_roll": metrics.get("rmse_att_roll", 0.0),
-                "rmse_att_pitch": metrics.get("rmse_att_pitch", 0.0),
+                # "rmse_att_roll": metrics.get("rmse_att_roll", 0.0),
+                # "rmse_att_pitch": metrics.get("rmse_att_pitch", 0.0),
+                "rms_att":metrics.get("rms_att",0.0),
                 "rms_omega": metrics.get("rms_omega", 0.0),
+
                 "mean_control_effort": metrics.get("mean_control_effort", 0.0),
                 "rms_dv": metrics.get("rms_dv", 0.0),
                 "rms_domega": metrics.get("rms_domega", 0.0),
                 "rms_du": metrics.get("rms_du", 0.0),
+
                 "saturation_hits": metrics.get("saturation_hits", 0.0),
                 "overshoot_hits": metrics.get("overshoot_hits", 0.0),
             })
@@ -662,103 +660,140 @@ class QuadcopterEnv(gym.Env):
     #     }
     #     self.ctrl.update_gains(gains_from_action)
     
-    def _apply_pid_parameters(self, action: np.ndarray) -> np.ndarray:
+    def _apply_pid_parameters(self, action: np.ndarray) -> dict:
         """
-        将标准化动作转为 ΔK（增量），在物理范围内更新 PID 参数，并应用到控制系统。
-        - 假设 action 为 shape (20,)
-        - 推荐 action ∈ [-1, 1]；若仍是 [0,1]，会先平移缩放到 [-1,1]
-        - 使用 self.deltaK_max: shape(20,) 每维允许的最大增量
-        - 使用 self.pid_safe_min/max: shape(20,) 物理上下界（与原切片一致）
-        - 维护 self.pid_K_prev: dict 保存上一次的各环增益（用于增量与平滑/限速）
-        - 可选：速率限制 self.rate_limit: shape(20,)
-        - 可选：一阶平滑系数 self.alpha ∈ (0,1]
+        将标准化动作 (0..1) 映射为目标绝对 PID 增益，结合速率限制与一阶平滑，应用到控制器。
+        假设:
+        - action.shape == (20,)
+        - self.pid_safe_min / self.pid_safe_max: shape (20,) 安全物理上下界
+        - self.rate_limit: shape (20,) 或标量，表示每步最大允许变化量（可选）
+        - self.alpha ∈ (0, 1] 一阶平滑系数（可选，1.0 = 不平滑）
+        - self.pid_K_prev: dict，记录上一次实际应用到控制器的各环增益（首次需初始化）
+        返回:
+        - gains_from_action: dict[str, tuple]，八组增益（pos/vel、att、rate 的 P/I/D）
         """
+        import numpy as np
+
+        # 0) 预处理与安全检查
         action = np.asarray(action, dtype=np.float32)
+        if action.shape != (20,):
+            raise ValueError(f"Expected action shape (20,), got {action.shape}")
 
-        # 1) 将 [0,1] 的动作平移到 [-1,1]（如果动作空间已经是 [-1,1]，这步等价于恒等或可移除）
-        a = np.clip(action, -1.0, 1.0)
+        # 1) 将 [0,1] 直接映射为“目标绝对增益” K_target (20,)
+        K_min = np.asarray(self.pid_safe_min, dtype=np.float32)  # shape (20,)
+        K_max = np.asarray(self.pid_safe_max, dtype=np.float32)  # shape (20,)
+        action01 = np.clip(action, 0.0, 1.0)
+        K_target = K_min + (K_max - K_min) * action01
+        K_target = np.clip(K_target, K_min, K_max)
 
-        # 2) 计算每维 ΔK（按各维 deltaK_max 缩放）
-        # 需要你在 __init__ 中定义 self.deltaK_max = np.array(shape=(20,))
-        deltaK = self.deltaK_max * a  # shape (20,)
+        # 2) 获取当前（上一时刻）绝对增益向量 K_prev_vec (20,)
+        # 需要把你当前控制器中的八组增益按固定顺序拼接成 20 维向量。
+        # 对于 pos/vel 的 XY 共用 + Z 单独 的约定，这里使用两个值的布局：
+        #   [posP_XY, posP_Z, velP_XY, velP_Z, velI_XY, velI_Z, velD_XY, velD_Z, attP(3), rateP(3), rateI(3), rateD(3)]
+        def _pack_prev_to_vec(prev: dict) -> np.ndarray:
+            posP = np.array(prev["pos_P_gains"], dtype=np.float32)    # (3,)
+            velP = np.array(prev["vel_P_gains"], dtype=np.float32)    # (3,)
+            velI = np.array(prev["vel_I_gains"], dtype=np.float32)    # (3,)
+            velD = np.array(prev["vel_D_gains"], dtype=np.float32)    # (3,)
+            attP = np.array(prev["att_P_gains"], dtype=np.float32)    # (3,)
+            rP   = np.array(prev["rate_P_gains"], dtype=np.float32)   # (3,)
+            rI   = np.array(prev["rate_I_gains"], dtype=np.float32)   # (3,)
+            rD   = np.array(prev["rate_D_gains"], dtype=np.float32)   # (3,)
+            # 将 (X, Y, Z) 压缩为 (XY_shared, Z) 的 2 值布局，假设 X=Y 为共用
+            posP_xy, posP_z = posP[0], posP[2]
+            velP_xy, velP_z = velP[0], velP[2]
+            velI_xy, velI_z = velI[0], velI[2]
+            velD_xy, velD_z = velD[0], velD[2]
+            return np.concatenate([
+                [posP_xy, posP_z],
+                [velP_xy, velP_z],
+                [velI_xy, velI_z],
+                [velD_xy, velD_z],
+                attP, rP, rI, rD
+            ]).astype(np.float32)
 
-        # 3) 取出上一时刻的绝对增益（拼成与 action 对齐的 1x20 向量）
-        # 这些来自你系统当前实际使用的 PID（不是安全上下界）
-        # 假设按照你原来的分段顺序拼接：
-        K_prev_vec = np.concatenate([
-            np.array(self.pid_K_prev['pos_P_gains'])[ [0, 2] ],        # XY->x取index0, Z取index? 见下方注释
-            np.array(self.pid_K_prev['vel_P_gains'])[ [0, 2] ],
-            np.array(self.pid_K_prev['vel_I_gains'])[ [0, 2] ],
-            np.array(self.pid_K_prev['vel_D_gains'])[ [0, 2] ],
-            np.array(self.pid_K_prev['att_P_gains']),                   # 3
-            np.array(self.pid_K_prev['rate_P_gains']),                  # 3
-            np.array(self.pid_K_prev['rate_I_gains']),                  # 3
-            np.array(self.pid_K_prev['rate_D_gains']),                  # 3
-        ], axis=0).astype(np.float32)
+        # 若首次调用没有 pid_K_prev，则用中值初始化（或从 ctrl 读取当前值更合理）
+        if not hasattr(self, "pid_K_prev") or self.pid_K_prev is None:
+            mid = (K_min + K_max) * 0.5
+            # 解包为 8 组增益（见下方 _unpack_vec_to_groups），并存入 pid_K_prev
+            self.pid_K_prev = self._unpack_vec_to_groups(mid)
 
-        # 说明：
-        # 你原代码中 XY 共用参数复制到 X 和 Y（两个维度），“第三个值用作 Z”。
-        # 这里在拼接时，我们取 pos/vel 的两个值：index0 表示 XY 共用值，index1 表示 Z 值。
-        # 若你内部存储是 (X, Y, Z)，且 X=Y=shared，请确保 pid_K_prev 中 pos/vel 系列的结构与这里一致。
-        # 如果 pid_K_prev 存的是 (sharedXY, Z)，则这里索引就按 [0,1] 即可。上面写法仅示意。
-        # 请按你的实际数据结构调整索引映射。
+        K_prev_vec = _pack_prev_to_vec(self.pid_K_prev)  # shape (20,)
 
-        # 4) 计算提议增益并进行物理裁剪
-        K_min = self.pid_safe_min.astype(np.float32)  # shape (20,)
-        K_max = self.pid_safe_max.astype(np.float32)  # shape (20,)
-
-        K_prop_vec = np.clip(K_prev_vec + deltaK, K_min, K_max)
-
-        # 5) 速率限制（可选）：每步最多变化 self.rate_limit
+        # 3) 速率限制（逐元素限制每步变化量）
         if hasattr(self, "rate_limit") and self.rate_limit is not None:
-            dK = np.clip(K_prop_vec - K_prev_vec, -self.rate_limit, self.rate_limit)
+            rate_lim = np.asarray(self.rate_limit, dtype=np.float32)
+            if rate_lim.shape == ():
+                rate_lim = np.full_like(K_target, float(rate_lim))
+            elif rate_lim.shape != K_target.shape:
+                raise ValueError(f"rate_limit shape mismatch: {rate_lim.shape} vs {K_target.shape}")
+            dK = np.clip(K_target - K_prev_vec, -rate_lim, rate_lim)
             K_rate_limited = K_prev_vec + dK
         else:
-            K_rate_limited = K_prop_vec
+            K_rate_limited = K_target
 
-        # 6) 一阶平滑（可选）
-        alpha = 0.8  # 1.0 表示不平滑，直接采用 前一个step的PID参数+action(PID增量)
+        # 4) 一阶平滑
+        alpha = getattr(self, "alpha", 1.0)
+        alpha = float(np.clip(alpha, 1e-6, 1.0))  # 1.0 表示不平滑
         K_new_vec = (1.0 - alpha) * K_prev_vec + alpha * K_rate_limited
 
-        # 7) 将 1x20 的向量解包回各环（保持你原先 8 组的切片规则）
-        # 切片区间与原 action 对齐：
-        pos_P_from_vec = K_new_vec[0:2]
-        vel_P_from_vec = K_new_vec[2:4]
-        vel_I_from_vec = K_new_vec[4:6]
-        vel_D_from_vec = K_new_vec[6:8]
-        att_P_from_vec = K_new_vec[8:11]
-        rate_P_from_vec = K_new_vec[11:14]
-        rate_I_from_vec = K_new_vec[14:17]
-        rate_D_from_vec = K_new_vec[17:20]
+        # 5) 安全裁剪（冗余但稳妥）
+        K_new_vec = np.clip(K_new_vec, K_min, K_max)
 
-        # 8) XY 共用参数展开为三轴（与你原逻辑保持一致）
-        pos_P_gains = (pos_P_from_vec[0], pos_P_from_vec[0], pos_P_from_vec[1])  # X=Y=pos_P[0], Z=pos_P[1]
-        vel_P_gains = (vel_P_from_vec[0], vel_P_from_vec[0], vel_P_from_vec[1])
-        vel_I_gains = (vel_I_from_vec[0], vel_I_from_vec[0], vel_I_from_vec[1])
-        vel_D_gains = (vel_D_from_vec[0], vel_D_from_vec[0], vel_D_from_vec[1])
-        att_P_gains = tuple(att_P_from_vec.tolist())
-        rate_P_gains = tuple(rate_P_from_vec.tolist())
-        rate_I_gains = tuple(rate_I_from_vec.tolist())
-        rate_D_gains = tuple(rate_D_from_vec.tolist())
+        # 6) 解包回 8 组增益，并做 XY→XYZ 展开
+        gains_from_action = self._unpack_vec_to_groups(K_new_vec)
 
-        gains_from_action = {
-            'pos_P_gains': pos_P_gains,
-            'vel_P_gains': vel_P_gains,
-            'vel_I_gains': vel_I_gains,
-            'vel_D_gains': vel_D_gains,
-            'att_P_gains': att_P_gains,
-            'rate_P_gains': rate_P_gains,
-            'rate_I_gains': rate_I_gains,
-            'rate_D_gains': rate_D_gains,
-        }
-
-        # 9) 应用到控制器
+        # 7) 应用到控制器并保存状态
         self.ctrl.update_gains(gains_from_action)
-
-        # 10) 保存当前增益为下次的 prev（用于增量、平滑和速率限制）
         self.pid_K_prev = gains_from_action
         return gains_from_action
+    
+    # 解包 20 维向量为 8 组增益
+    def _unpack_vec_to_groups(self, K_vec: np.ndarray) -> dict:
+        """
+        将 20 维向量解包为 8 组增益，并按 XY 共用 → XYZ 展开为 (X, Y, Z)。
+        向量布局:
+        0:2 posP (XY, Z)
+        2:4 velP (XY, Z)
+        4:6 velI (XY, Z)
+        6:8 velD (XY, Z)
+        8:11 attP (3)
+        11:14 rateP (3)
+        14:17 rateI (3)
+        17:20 rateD (3)
+        """
+        import numpy as np
+        K_vec = np.asarray(K_vec, dtype=np.float32).reshape(20,)
 
+        posP_xy, posP_z = K_vec[0],  K_vec[1]
+        velP_xy, velP_z = K_vec[2],  K_vec[3]
+        velI_xy, velI_z = K_vec[4],  K_vec[5]
+        velD_xy, velD_z = K_vec[6],  K_vec[7]
+        attP = K_vec[8:11]
+        rP   = K_vec[11:14]
+        rI   = K_vec[14:17]
+        rD   = K_vec[17:20]
+
+        # XY → XYZ 展开：X=Y=XY_shared，Z=Z_value
+        pos_P_gains = (float(posP_xy), float(posP_xy), float(posP_z))
+        vel_P_gains = (float(velP_xy), float(velP_xy), float(velP_z))
+        vel_I_gains = (float(velI_xy), float(velI_xy), float(velI_z))
+        vel_D_gains = (float(velD_xy), float(velD_xy), float(velD_z))
+        att_P_gains = tuple(attP.tolist())
+        rate_P_gains = tuple(rP.tolist())
+        rate_I_gains = tuple(rI.tolist())
+        rate_D_gains = tuple(rD.tolist())
+
+        return {
+            "pos_P_gains": pos_P_gains,
+            "vel_P_gains": vel_P_gains,
+            "vel_I_gains": vel_I_gains,
+            "vel_D_gains": vel_D_gains,
+            "att_P_gains": att_P_gains,
+            "rate_P_gains": rate_P_gains,
+            "rate_I_gains": rate_I_gains,
+            "rate_D_gains": rate_D_gains,
+        }
     # =========================
     # 观测
     # =========================
@@ -869,19 +904,21 @@ class QuadcopterEnv(gym.Env):
             "pos_err_z": pos_err_z,
             "vel_err_xy": vel_err_xy,
             "vel_err_z": vel_err_z,
+
             "att_norm": att_norm,
             "att_err_roll": abs(att_err_roll),
             "att_err_pitch": abs(att_err_pitch),
             "att_err_yaw": att_err_yaw,
+
             "omega_norm": omega_norm,
             "omega_err_p": omega_err_p,
             "omega_err_q": omega_err_q,
             "omega_err_r": omega_err_r,
-            "pos_err_vec": pos_err_vec,
-            "vel_err_vec": vel_err_vec,
+            # "pos_err_vec": pos_err_vec,
+            # "vel_err_vec": vel_err_vec,
         }
 
-    def _dense_reward_instant(self, m) -> float:
+    # def _dense_reward_instant(self, m) -> float:
         """
         即时（密集）奖励：每个仿真子步计算。
         - 分轴位置误差（XY、Z分权）
@@ -956,31 +993,31 @@ class QuadcopterEnv(gym.Env):
             "pos_z2": m["pos_err_z"]**2,
             "vel_xy2": m["vel_err_xy"]**2,
             "vel_z2": m["vel_err_z"]**2,
-            "att_roll2": m["att_err_roll"]**2,
-            "att_pitch2": m["att_err_pitch"]**2,
+
+            "att2":m["att_norm"]**2,
             "omega2": m["omega_norm"]**2,
+
             "u2": control_effort,
             "dv2": dv**2,
             "domega2": domega**2,
             "du2": du**2,
+
             "sat_hit": saturation_hit,
             "over_hit": overshoot_hit,
+
         }
         return entry
 
     def _compute_segment_reward_step(self, samples: List[Dict[str, float]]) -> Tuple[float, Dict[str, float]]:
         """
         基于“本步子步样本”计算一次分段奖励。
-        与原来的滑窗不同，这里对本步样本做简单均值/RMSE，不再做时间权重。
         """
         if len(samples) == 0:
             return 0.0, {}
 
-        import numpy as np
-
         # 将样本堆叠
         keys = ["pos_xy2", "pos_z2", "vel_xy2", "vel_z2",
-                "att_roll2", "att_pitch2", "omega2",
+                "att2", "omega2",
                 "u2", "dv2", "domega2", "du2",
                 "sat_hit", "over_hit"]
         S = {k: np.array([e[k] for e in samples], dtype=float) for k in keys}
@@ -990,8 +1027,9 @@ class QuadcopterEnv(gym.Env):
         rmse_pos_z    = float(np.sqrt(np.mean(S["pos_z2"])))
         rmse_vel_xy   = float(np.sqrt(np.mean(S["vel_xy2"])))
         rmse_vel_z    = float(np.sqrt(np.mean(S["vel_z2"])))
-        rmse_att_roll = float(np.sqrt(np.mean(S["att_roll2"])))
-        rmse_att_pitch= float(np.sqrt(np.mean(S["att_pitch2"])))
+        rmse_att      = float(np.sqrt(np.mean(S["att2"])))
+        # rmse_att_roll = float(np.sqrt(np.mean(S["att_roll2"])))
+        # rmse_att_pitch= float(np.sqrt(np.mean(S["att_pitch2"])))
         rms_omega     = float(np.sqrt(np.mean(S["omega2"])))
 
         mean_control_effort = float(np.mean(S["u2"]))
@@ -1011,9 +1049,11 @@ class QuadcopterEnv(gym.Env):
             sw["W_pos_z"]  * rmse_pos_z  +
             sw["W_vel_xy"] * rmse_vel_xy +
             sw["W_vel_z"]  * rmse_vel_z  +
-            sw["W_att_roll"]  * rmse_att_roll +
-            sw["W_att_pitch"] * rmse_att_pitch +
+            # sw["W_att_roll"]  * rmse_att_roll +
+            # sw["W_att_pitch"] * rmse_att_pitch +
+            sw["W_att"]    * rmse_att +
             sw["W_omega"]  * rms_omega +
+
             sw["W_u"]      * mean_control_effort +
             sw["W_dv"]     * rms_dv +
             sw["W_domega"] * rms_domega +
@@ -1028,13 +1068,16 @@ class QuadcopterEnv(gym.Env):
             'rmse_pos_z': rmse_pos_z,
             'rmse_vel_xy': rmse_vel_xy,
             'rmse_vel_z': rmse_vel_z,
-            'rmse_att_roll': rmse_att_roll,
-            'rmse_att_pitch': rmse_att_pitch,
+            # 'rmse_att_roll': rmse_att_roll,
+            # 'rmse_att_pitch': rmse_att_pitch,
+            'rmse_att': rmse_att,
             'rms_omega': rms_omega,
+
             'mean_control_effort': mean_control_effort,
             'rms_dv': rms_dv,
             'rms_domega': rms_domega,
             'rms_du': rms_du,
+
             'saturation_hits': saturation_hits,
             'overshoot_hits': overshoot_hits,
             'segment_reward': float(segment_reward),
@@ -1188,31 +1231,31 @@ class QuadcopterEnv(gym.Env):
         return {
             "rate_L0": dict(
                 W_pos_xy=0.3/3, W_pos_z=0.25, W_vel_xy=0.15, W_vel_z=0.1,
-                W_att_roll=0.1, W_att_pitch=0.1, W_omega=0.02,
+                W_att=0.1, W_omega=0.02,
                 W_u=0.0, W_dv=0.0, W_domega=0.0, W_du=0.0,              # 控制能量与平滑不纳入奖励(暂不开启) / W_u=0.05, W_dv=0.06, W_domega=0.07, W_du=0.08,
                 W_sat=0.15, W_over=0.15,
             ),
             "att_L1": dict(
                 W_pos_xy=0.3/3, W_pos_z=0.25, W_vel_xy=0.15, W_vel_z=0.1,
-                W_att_roll=0.1, W_att_pitch=0.1, W_omega=0.02,
+                W_att=0.1, W_omega=0.02,
                 W_u=0.0, W_dv=0.0, W_domega=0.0, W_du=0.0,              # 控制能量与平滑不纳入奖励(暂不开启) / W_u=0.05, W_dv=0.06, W_domega=0.07, W_du=0.08,
                 W_sat=0.15, W_over=0.15,
             ),
             "vel_L2": dict(
                 W_pos_xy=0.3, W_pos_z=0.25, W_vel_xy=0.15, W_vel_z=0.1,
-                W_att_roll=0.1, W_att_pitch=0.1, W_omega=0.02,
+                W_att=0.1, W_omega=0.02,
                 W_u=0.0, W_dv=0.0, W_domega=0.0, W_du=0.0,              # 控制能量与平滑不纳入奖励(暂不开启) / W_u=0.05, W_dv=0.06, W_domega=0.07, W_du=0.08,
                 W_sat=0.15, W_over=0.15,
             ),
             "pos_L3": dict(
                 W_pos_xy=0.3, W_pos_z=0.25, W_vel_xy=0.15, W_vel_z=0.1,
-                W_att_roll=0.1, W_att_pitch=0.1, W_omega=0.02,
+                W_att=0.1, W_omega=0.02,
                 W_u=0.0, W_dv=0.0, W_domega=0.0, W_du=0.0,              # 控制能量与平滑不纳入奖励(暂不开启) / W_u=0.05, W_dv=0.06, W_domega=0.07, W_du=0.08,
                 W_sat=0.15, W_over=0.15,
             ),
             "all_L4": dict(
                 W_pos_xy=0.3, W_pos_z=0.25, W_vel_xy=0.15, W_vel_z=0.1,
-                W_att_roll=0.1, W_att_pitch=0.1, W_omega=0.02,
+                W_att=0.1, W_omega=0.02,
                 W_u=0.0, W_dv=0.0, W_domega=0.0, W_du=0.0,              # 控制能量与平滑不纳入奖励(暂不开启) / W_u=0.05, W_dv=0.06, W_domega=0.07, W_du=0.08,
                 W_sat=0.15, W_over=0.15,
             ),

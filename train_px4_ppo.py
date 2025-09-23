@@ -37,7 +37,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--trajectory-type", type=int, default=5, help="Trajectory type (0-13)")
     parser.add_argument("--yaw-type", type=int, default=3, help="Yaw control type (0-4)")
     parser.add_argument("--max-episode-steps", type=int, default=2000, help="Maximum steps per episode")
-    parser.add_argument("--rl-dt", type=float, default=0.05, help="RL decision timestep (seconds)")
+    parser.add_argument("--rl-dt", type=float, default=0.5, help="RL decision timestep (seconds)")
     parser.add_argument("--sim-dt", type=float, default=0.005, help="Simulation timestep (seconds)")
     parser.add_argument("--wind-type", type=str, default="None", help="Wind disturbance type")
     parser.add_argument("--wind-strength", type=float, default=0.0, help="Wind strength")
@@ -46,27 +46,27 @@ def get_args() -> argparse.Namespace:
 
     # 训练参数
     parser.add_argument("--seed", type=int, default=100)
-    parser.add_argument("--buffer-size", type=int, default=4096)
+    parser.add_argument("--buffer-size", type=int, default=16384)
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--epoch", type=int, default=100)
-    parser.add_argument("--step-per-epoch", type=int, default=16384)
+    parser.add_argument("--step-per-epoch", type=int, default=32768)
     parser.add_argument("--step-per-collect", type=int, default=4096)
-    parser.add_argument("--repeat-per-collect", type=int, default=3)        # 每次收集后重复更新6次，10次就太稳了
-    parser.add_argument("--batch-size", type=int, default=512)
-    parser.add_argument("--training-num", type=int, default=8)
-    parser.add_argument("--test-num", type=int, default=8)
+    parser.add_argument("--repeat-per-collect", type=int, default=10)        # 每次收集后重复更新6次，10次就太稳了
+    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--training-num", type=int, default=16)
+    parser.add_argument("--test-num", type=int, default=16)
     
     # PPO特定参数
     parser.add_argument("--rew-norm", type=int, default=1, help="Reward normalization")
-    parser.add_argument("--vf-coef", type=float, default=0.3, help="Value function coefficient")
-    parser.add_argument("--ent-coef", type=float, default=0.003, help="Entropy coefficient")
+    parser.add_argument("--vf-coef", type=float, default=0.5, help="Value function coefficient")
+    parser.add_argument("--ent-coef", type=float, default=0.01, help="Entropy coefficient")
     parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda")
     parser.add_argument("--bound-action-method", type=str, default="clip")
     parser.add_argument("--lr-decay", type=int, default=1)
-    parser.add_argument("--max-grad-norm", type=float, default=0.5)
-    parser.add_argument("--eps-clip", type=float, default=0.12)
+    parser.add_argument("--max-grad-norm", type=float, default=0.6)
+    parser.add_argument("--eps-clip", type=float, default=0.25)
     parser.add_argument("--dual-clip", type=float, default=None)
     parser.add_argument("--value-clip", type=int, default=1)
     parser.add_argument("--norm-adv", type=int, default=1)
@@ -74,7 +74,7 @@ def get_args() -> argparse.Namespace:
     
     # 课程学习参数
     parser.add_argument("--use-curriculum", action="store_true", default=False, help="Enable curriculum learning")
-    parser.add_argument("--curriculum-stages", type=int, default=5, help="Number of curriculum stages")
+    parser.add_argument("--curriculum-stages", type=int, default=4, help="Number of curriculum stages")
     parser.add_argument("--stage-threshold", type=dict, default=None, help="Success rate threshold to advance stage")
     
     # 日志和保存
@@ -176,11 +176,11 @@ class CurriculumManager:
         self.cooldown_epochs = int(cooldown_epochs)
 
         self.thresholds = threshold or {
-            0:-10000,         # L0 进阶阈值
-            1:-10000,         # L1 进阶阈值
-            2:-10000,         # L2 进阶阈值
-            3:-10000,         # L3 进阶阈值
-            4:-10000,         # L4 进阶阈值
+            0:-100,         # L0 进阶阈值
+            1:-100,         # L1 进阶阈值
+            2:-100,         # L2 进阶阈值
+            3:-100,         # L3 进阶阈值
+            4:-100,         # L4 进阶阈值
         }
         
         # 记录评估历史
@@ -372,8 +372,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
 
     # 设置日志
     now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
-    args.algo_name = "ppo"
-    log_name = os.path.join("px4_quad", args.algo_name, str(args.seed), now)
+    log_name = os.path.join(str(args.seed), now)
     log_path = os.path.join(args.logdir, log_name)
     
     # 创建logger
@@ -410,11 +409,11 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         """在每个epoch开始时调用"""
 
         # 1) 记录评估结果
-        avg_reward = trainer.last_rew           # 找不到test_collector的eval结果，只能用trainer的last_rew
-        if avg_reward is None:
+        last_reward = trainer.last_rew           # 找不到test_collector的eval结果，只能用trainer的last_rew
+        if last_reward is None:
             print(f"Epoch {epoch}: no eval reward available yet")
             return
-        curriculum_manager.push_eval_score(avg_reward)
+        curriculum_manager.push_eval_score(last_reward)
 
         # 2) 判断是否升级
         if curriculum_manager.should_advance(epoch):
@@ -456,7 +455,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             logger=exp_logger,
             test_in_train=True,
             train_fn=train_fn if curriculum_manager else None,
-            verbose=False,
+            verbose=True,
         )
         
         result = trainer.run()
