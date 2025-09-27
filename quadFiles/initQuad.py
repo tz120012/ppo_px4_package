@@ -12,16 +12,16 @@ from numpy.linalg import inv
 import utils
 import config
 
-# System parameters:x500
+# System parameters:F450
 def sys_params():
-    mB  = 2       # mass (kg)
+    mB  = 1.4       # mass (kg)
     g   = 9.81      # gravity (m/s/s)
     dxm = 0.174      # arm length (m)
     dym = 0.174      # arm length (m)
     dzm = 0.032      # motor height (m)
-    IB  = np.array([[0.0217, 0,      0     ],
-                    [0,      0.0217, 0     ],
-                    [0,      0,      0.04]]) # Inertial tensor (kg*m^2)
+    IB  = np.array([[0.0219, 0,      0     ],
+                    [0,      0.0219, 0     ],
+                    [0,      0,      0.0366]]) # Inertial tensor (kg*m^2)
     IRzz = 2.7e-5   # Rotor moment of inertia (kg*m^2)*************
 
 
@@ -37,21 +37,21 @@ def sys_params():
     params["useIntergral"] = bool(False)    # Include integral gains in linear velocity control
     # params["interpYaw"] = bool(False)       # Interpolate Yaw setpoints in waypoint trajectory
 
-    params["Cd"]         = 0.1              # ***************
-    params["kTh"]        = 8.54858e-06 # thrust coeff (N/(rad/s)^2)  (1.18e-7 N/RPM^2)
-    params["kTo"]        = 1.3678e-07 # torque coeff (Nm/(rad/s)^2)  (1.79e-9 Nm/RPM^2)
+    params["Cd"]         = 0.073              # ***************
+    params["kTh"]        = 1.105e-05 # thrust coeff (N/(rad/s)^2)  (1.18e-7 N/RPM^2)
+    params["kTo"]        = 1.779e-07 # torque coeff (Nm/(rad/s)^2)  (1.79e-9 Nm/RPM^2)
     params["mixerFM"]    = makeMixerFM(params) # Make mixer that calculated Thrust (F) and moments (M) as a function on motor speeds
     params["mixerFMinv"] = inv(params["mixerFM"])
-    params["minThr"]     = 0.0215*4    # Minimum total thrust
-    params["maxThr"]     = 8.55*4   # Maximum total thrust
-    params["minWmotor"]  = 50       # Minimum motor rotation speed (rad/s)
-    params["maxWmotor"]  = 1000      # Maximum motor rotation speed (rad/s)
-    params["tau"]        = 0.0125    # Value for second order system for Motor dynamics
-    params["kp"]         = 1.0      # Value for second order system for Motor dynamics
-    params["damp"]       = 1.0      # Value for second order system for Motor dynamics
-    
-    params["motorc1"]    = 9.5     # w (rad/s) = cmd*c1 + c0 (cmd in %)
-    params["motorc0"]    = 50
+    params["minThr"]     = 0.0215*4         # Minimum total thrust
+    params["maxThr"]     = 14.57 * 4        # Maximum total thrust
+    params["minWmotor"]  = 0.01             # Minimum motor rotation speed (rad/s)
+    params["maxWmotor"]  = 1148             # Maximum motor rotation speed (rad/s)
+    params["tau"]        = 0.02             # Value for second order system for Motor dynamics
+    params["kp"]         = 1.0              # Value for second order system for Motor dynamics
+    params["damp"]       = 1.0              # Value for second order system for Motor dynamics
+
+    params["motorc1"]    = 11.48            # w (rad/s) = cmd*c1 + c0 (cmd in %)
+    params["motorc0"]    = 0.01
     params["motordeadband"] = 1   
     # params["ifexpo"] = bool(False)
     # if params["ifexpo"]:

@@ -173,11 +173,13 @@ log_px4/
 
 ```bash
 # 仅测试，不训练
-python train_px4_ppo.py --watch --resume-path <path-to-policy.pth> --test-num 10
+python train_px4_ppo.py --watch --resume-path ./log_px4/100/250925-134056/best_policy.pth --test-num 10
 
 # 测试并保存完整一集的飞行数据（CSV）
-python train_px4_ppo.py --watch --save-video --resume-path <path-to-policy.pth>
+python train_px4_ppo.py --watch --resume-path ./log_px4/100/250925-134056/best_policy.pth
 ```
+# 绘图
+python train_px4_ppo.py --watch --resume-path ./log_px4/100/250925-134056/best_policy.pth --render=0.1
 
 保存的 CSV 位于当前运行的日志目录下的一个 `episode_<timestamp>` 子目录中，包含整回合时序数据，便于分析或绘图。
 

@@ -36,37 +36,37 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--control-type", type=str, default="xyz_pos", choices=["xyz_pos", "xy_vel_z_pos", "xyz_vel"], help="Control mode for the quadcopter")
     parser.add_argument("--trajectory-type", type=int, default=5, help="Trajectory type (0-13)")
     parser.add_argument("--yaw-type", type=int, default=3, help="Yaw control type (0-4)")
-    parser.add_argument("--max-episode-steps", type=int, default=2000, help="Maximum steps per episode")
-    parser.add_argument("--rl-dt", type=float, default=0.5, help="RL decision timestep (seconds)")
-    parser.add_argument("--sim-dt", type=float, default=0.005, help="Simulation timestep (seconds)")
-    parser.add_argument("--wind-type", type=str, default="None", help="Wind disturbance type")
+    parser.add_argument("--max-episode-steps", type=int, default=600, help="Maximum steps per episode")     ##
+    parser.add_argument("--rl-dt", type=float, default=0.5, help="RL decision timestep (seconds)")          ##
+    parser.add_argument("--sim-dt", type=float, default=0.005, help="Simulation timestep (seconds)")        ##
+    parser.add_argument("--wind-type", type=str, default="None", help="Wind disturbance type")                       
     parser.add_argument("--wind-strength", type=float, default=0.0, help="Wind strength")
-    parser.add_argument("--dense-reward-scale", type=float, default=0.1, help="Scale factor for dense reward terms in environment")
+    # parser.add_argument("--dense-reward-scale", type=float, default=0.1, help="Scale factor for dense reward terms in environment")
     parser.add_argument("--test-env-mode", action="store_true", default=False, help="Enable single-env mode and write per-step info to CSV within env.step")  # 测试环境默认为False，记录step的info数据
 
     # 训练参数
     parser.add_argument("--seed", type=int, default=100)
-    parser.add_argument("--buffer-size", type=int, default=16384)
-    parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--epoch", type=int, default=100)
-    parser.add_argument("--step-per-epoch", type=int, default=32768)
-    parser.add_argument("--step-per-collect", type=int, default=4096)
-    parser.add_argument("--repeat-per-collect", type=int, default=10)        # 每次收集后重复更新6次，10次就太稳了
-    parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--training-num", type=int, default=16)
-    parser.add_argument("--test-num", type=int, default=16)
+    parser.add_argument("--buffer-size", type=int, default=16384)                   ##
+    parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])  ##
+    parser.add_argument("--lr", type=float, default=1e-4)                           ##
+    parser.add_argument("--gamma", type=float, default=0.99)                        ##
+    parser.add_argument("--epoch", type=int, default=100)                           ##
+    parser.add_argument("--step-per-epoch", type=int, default=32768)                ##
+    parser.add_argument("--step-per-collect", type=int, default=16384)              ## 4096
+    parser.add_argument("--repeat-per-collect", type=int, default=10)               ## 每次收集后重复更新6次，10次就太稳了
+    parser.add_argument("--batch-size", type=int, default=128)                      ##
+    parser.add_argument("--training-num", type=int, default=16)                     ##
+    parser.add_argument("--test-num", type=int, default=16)                         ##
     
     # PPO特定参数
     parser.add_argument("--rew-norm", type=int, default=1, help="Reward normalization")
-    parser.add_argument("--vf-coef", type=float, default=0.5, help="Value function coefficient")
-    parser.add_argument("--ent-coef", type=float, default=0.01, help="Entropy coefficient")
-    parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda")
+    parser.add_argument("--vf-coef", type=float, default=0.5, help="Value function coefficient")        ## 
+    parser.add_argument("--ent-coef", type=float, default=0.01, help="Entropy coefficient")             ##
+    parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda")                    ##
     parser.add_argument("--bound-action-method", type=str, default="clip")
     parser.add_argument("--lr-decay", type=int, default=1)
-    parser.add_argument("--max-grad-norm", type=float, default=0.6)
-    parser.add_argument("--eps-clip", type=float, default=0.25)
+    parser.add_argument("--max-grad-norm", type=float, default=0.6)                                     ##
+    parser.add_argument("--eps-clip", type=float, default=0.25)                                         ##
     parser.add_argument("--dual-clip", type=float, default=None)
     parser.add_argument("--value-clip", type=int, default=1)
     parser.add_argument("--norm-adv", type=int, default=1)
@@ -98,7 +98,7 @@ def make_px4_env(
     max_episode_steps: int,
     rl_dt: float,
     sim_dt: float,
-    dense_reward_scale: float,
+    # dense_reward_scale: float,
     wind_type: str,
     wind_strength: float,
     seed: int,
@@ -118,7 +118,7 @@ def make_px4_env(
                 max_episode_steps=600 if (watch) else max_episode_steps,
                 dt=sim_dt,
                 rl_dt=rl_dt,
-                dense_reward_scale=dense_reward_scale,
+                # dense_reward_scale=dense_reward_scale,
                 wind_type=wind_type,
                 wind_strength=wind_strength,
                 render_mode="rgb_array" if (watch) else None,           #"human","rgb_array"
@@ -251,7 +251,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         max_episode_steps=args.max_episode_steps,
         rl_dt=args.rl_dt,
         sim_dt=args.sim_dt,
-        dense_reward_scale=args.dense_reward_scale,
+        # dense_reward_scale=args.dense_reward_scale,
         wind_type=args.wind_type,
         wind_strength=args.wind_strength,
         seed=args.seed,

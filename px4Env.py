@@ -67,7 +67,7 @@ class QuadcopterEnv(gym.Env):
                  dt: float = 0.005,                 # 仿真积分时间步长（动力学/控制）
                  rl_dt: float = 0.05,               # RL决策时间步长（每次step保持action的时长）
                  target_pos: Optional[np.ndarray] = None,
-                 dense_reward_scale: float = 1.0,   # 即时奖励权重缩放
+                #  dense_reward_scale: float = 1.0,   # 即时奖励权重缩放
                  wind_type: str = 'None',
                  wind_strength: float = 0.0,
                  test_env_mode: bool = False,      # 测试模式：在 step 末尾写 CSV
@@ -87,7 +87,7 @@ class QuadcopterEnv(gym.Env):
             rl_dt: RL 决策步长（秒），一个step保持action的时长
             dt: 仿真时间步长（秒）
             target_pos: 目标位置 [x, y, z]
-            dense_reward_scale: 即时奖励缩放，便于调节奖励尺度
+            # dense_reward_scale: 即时奖励缩放，便于调节奖励尺度
             wind_type: 风模型类型
             wind_strength: 风力强度
             render_mode: 渲染模式 ('human' 或 'rgb_array')
@@ -107,7 +107,7 @@ class QuadcopterEnv(gym.Env):
         self.wind_type = wind_type
         self.wind_strength = wind_strength
         self.render_mode = render_mode
-        self.dense_reward_scale = float(dense_reward_scale)
+        # self.dense_reward_scale = float(dense_reward_scale)
         self.test_env_mode = test_env_mode
         # 控制和轨迹选项
         self.ctrlOptions = ["xyz_pos", "xy_vel_z_pos", "xyz_vel"]
@@ -190,14 +190,24 @@ class QuadcopterEnv(gym.Env):
         mid = (self.pid_safe_min + self.pid_safe_max) / 2.0
 
         # 将 20维中 (xy, z) 段展开为三轴，形成控制器需要的三轴字典
-        pos_P_gains = (mid[0], mid[0], mid[1])
-        vel_P_gains = (mid[2], mid[2], mid[3])
-        vel_I_gains = (mid[4], mid[4], mid[5])
-        vel_D_gains = (mid[6], mid[6], mid[7])
-        att_P_gains = (mid[8], mid[9], mid[10])
-        rate_P_gains = (mid[11], mid[12], mid[13])
-        rate_I_gains = (mid[14], mid[15], mid[16])
-        rate_D_gains = (mid[17], mid[18], mid[19])
+        # pos_P_gains = (mid[0], mid[0], mid[1])
+        # vel_P_gains = (mid[2], mid[2], mid[3])
+        # vel_I_gains = (mid[4], mid[4], mid[5])
+        # vel_D_gains = (mid[6], mid[6], mid[7])
+        # att_P_gains = (mid[8], mid[9], mid[10])
+        # rate_P_gains = (mid[11], mid[12], mid[13])
+        # rate_I_gains = (mid[14], mid[15], mid[16])
+        # rate_D_gains = (mid[17], mid[18], mid[19])
+
+        pos_P_gains = (2.0, 2.0, 1.5)
+        vel_P_gains = (5.0, 5.0, 15.0)
+        vel_I_gains = (60, 60, 3.0)
+        vel_D_gains = (2.0, 2.0, 2.0)
+        att_P_gains = (12.0, 12.0, 5.0)
+        rate_P_gains = (0.5, 0.6, 0.6)
+        rate_I_gains = (10.0, 10.0, 10.0)
+        rate_D_gains = (0.01, 0.01, 0.01)
+
 
         self.pid_K_prev = {
             'pos_P_gains': pos_P_gains,
@@ -345,20 +355,23 @@ class QuadcopterEnv(gym.Env):
                 float(br.get("dense_mean", 0.0)),
                 float(br.get("segment_reward", 0.0)),
                 float(br.get("total_reward", 0.0)),
-                float(br.get("dense_scale", self.dense_reward_scale)),
+                # float(br.get("dense_scale", self.dense_reward_scale)),
 
                 float(br.get("segment_duration", last_seg.get("segment_duration", 0.0))),
                 float(br.get("rmse_pos_xy", last_seg.get("rmse_pos_xy", 0.0))),
                 float(br.get("rmse_pos_z", last_seg.get("rmse_pos_z", 0.0))),
                 float(br.get("rmse_vel_xy", last_seg.get("rmse_vel_xy", 0.0))),
                 float(br.get("rmse_vel_z", last_seg.get("rmse_vel_z", 0.0))),
-                float(br.get("rmse_att_roll", last_seg.get("rmse_att_roll", 0.0))),
-                float(br.get("rmse_att_pitch", last_seg.get("rmse_att_pitch", 0.0))),
+                # float(br.get("rmse_att_roll", last_seg.get("rmse_att_roll", 0.0))),
+                # float(br.get("rmse_att_pitch", last_seg.get("rmse_att_pitch", 0.0))),
+                float(br.get("rmse_att", last_seg.get("rmse_att", 0.0))),
                 float(br.get("rms_omega", last_seg.get("rms_omega", 0.0))),
+
                 float(br.get("mean_control_effort", last_seg.get("mean_control_effort", 0.0))),
                 float(br.get("rms_dv", last_seg.get("rms_dv", 0.0))),
                 float(br.get("rms_domega", last_seg.get("rms_domega", 0.0))),
                 float(br.get("rms_du", last_seg.get("rms_du", 0.0))),
+
                 float(br.get("saturation_hits", last_seg.get("saturation_hits", 0.0))),
                 float(br.get("overshoot_hits", last_seg.get("overshoot_hits", 0.0))),
 
@@ -441,15 +454,23 @@ class QuadcopterEnv(gym.Env):
         # 重置初始参数
         mid = (self.pid_safe_min + self.pid_safe_max) / 2.0
 
-        pos_P_gains = (mid[0], mid[0], mid[1])
-        vel_P_gains = (mid[2], mid[2], mid[3])
-        vel_I_gains = (mid[4], mid[4], mid[5])
-        vel_D_gains = (mid[6], mid[6], mid[7])
-        att_P_gains = (mid[8], mid[9], mid[10])
-        rate_P_gains = (mid[11], mid[12], mid[13])
-        rate_I_gains = (mid[14], mid[15], mid[16])
-        rate_D_gains = (mid[17], mid[18], mid[19])
-
+        # pos_P_gains = (mid[0], mid[0], mid[1])
+        # vel_P_gains = (mid[2], mid[2], mid[3])
+        # vel_I_gains = (mid[4], mid[4], mid[5])
+        # vel_D_gains = (mid[6], mid[6], mid[7])
+        # att_P_gains = (mid[8], mid[9], mid[10])
+        # rate_P_gains = (mid[11], mid[12], mid[13])
+        # rate_I_gains = (mid[14], mid[15], mid[16])
+        # rate_D_gains = (mid[17], mid[18], mid[19])
+        pos_P_gains = (2.0, 2.0, 1.5)
+        vel_P_gains = (5.0, 5.0, 15.0)
+        vel_I_gains = (60, 60, 3.0)
+        vel_D_gains = (2.0, 2.0, 2.0)
+        att_P_gains = (12.0, 12.0, 5.0)
+        rate_P_gains = (0.5, 0.6, 0.6)
+        rate_I_gains = (10.0, 10.0, 10.0)
+        rate_D_gains = (0.01, 0.01, 0.01)
+        
         self.pid_K_prev = {
             'pos_P_gains': pos_P_gains,
             'vel_P_gains': vel_P_gains,
@@ -589,7 +610,7 @@ class QuadcopterEnv(gym.Env):
             # "dense_mean": float(dense_mean),
             "segment_reward": float(segment_reward),
             "total_reward": float(reward),
-            "dense_scale": float(self.dense_reward_scale),
+            # "dense_scale": float(self.dense_reward_scale),
         }
         if metrics is not None:
             info["step_reward_breakdown"].update({
@@ -919,23 +940,24 @@ class QuadcopterEnv(gym.Env):
         }
 
     # def _dense_reward_instant(self, m) -> float:
-        """
-        即时（密集）奖励：每个仿真子步计算。
-        - 分轴位置误差（XY、Z分权）
-        - 速度跟踪误差（相对 v_ref）
-        - 姿态误差（phi、theta 分开）
-        - 角速度范数
-        """
-        rw = self.reward_weights
-        dense = -(
-            rw["w_pos_xy"] * m["pos_err_xy"] +
-            rw["w_pos_z"]  * m["pos_err_z"]  +
-            rw["w_vel_xy"] * m["vel_err_xy"] +
-            rw["w_vel_z"]  * m["vel_err_z"]  +
-            rw["w_att"]    * m["att_norm"]   +
-            rw["w_omega"]  * m["omega_norm"]
-        )
-        return float(self.dense_reward_scale * dense)
+    #     """
+    #     即时（密集）奖励：每个仿真子步计算。
+    #     - 分轴位置误差（XY、Z分权）
+    #     - 速度跟踪误差（相对 v_ref）
+    #     - 姿态误差（phi、theta 分开）
+    #     - 角速度范数
+    #     """
+    #     rw = self.reward_weights
+    #     dense = -(
+    #         rw["w_pos_xy"] * m["pos_err_xy"] +
+    #         rw["w_pos_z"]  * m["pos_err_z"]  +
+    #         rw["w_vel_xy"] * m["vel_err_xy"] +
+    #         rw["w_vel_z"]  * m["vel_err_z"]  +
+    #         rw["w_att"]    * m["att_norm"]   +
+    #         rw["w_omega"]  * m["omega_norm"]
+    #     )
+    #     return float(self.dense_reward_scale * dense)
+
 
     def _collect_step_sample(self, m: Dict[str, Any], prev_cache: Dict[str, Any]) -> Dict[str, float]:
         """
