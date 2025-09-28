@@ -176,11 +176,19 @@ class CurriculumManager:
         self.cooldown_epochs = int(cooldown_epochs)
 
         self.thresholds = threshold or {
-            0:-100,         # L0 进阶阈值
-            1:-100,         # L1 进阶阈值
-            2:-100,         # L2 进阶阈值
+            0:-70,         # L0 进阶阈值
+            1:-70,         # L1 进阶阈值
+            2:-10,         # L2 进阶阈值
             3:-100,         # L3 进阶阈值
             4:-100,         # L4 进阶阈值
+        }
+
+        self.threshold_by_epochs = {
+            0:150,       # L0 进阶阈值
+            1:300,      # L1 进阶阈值
+            2:500,      # L2 进阶阈值
+            3:800,      # L3 进阶阈值
+            4:1000,      # L4 进阶阈值
         }
         
         # 记录评估历史
@@ -223,6 +231,19 @@ class CurriculumManager:
             self.pass_streak = 0
 
         return (self.pass_streak >= self.min_pass_count) and (self.current_stage < self.num_stages - 1)
+
+    def should_advance_by_epochs(self, epoch: int) -> bool:
+        """基于训练步数判断是否升级（仅供参考，未使用）"""
+        # 冷却期
+        if (epoch - self.last_advance_epoch) < self.cooldown_epochs:
+            return False
+        # 当前阶段阈值
+        thr = self.threshold_by_epochs.get(self.current_stage, None)
+        if thr is None:
+            return False
+
+        return epoch >= thr and (self.current_stage < self.num_stages - 1)
+
 
     def advance_stage(self, epoch: int) -> dict:
         self.current_stage = min(self.current_stage + 1, self.num_stages - 1)
@@ -416,7 +437,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         curriculum_manager.push_eval_score(last_reward)
 
         # 2) 判断是否升级
-        if curriculum_manager.should_advance(epoch):
+        if curriculum_manager.should_advance_by_epochs(epoch):
             curriculum_manager.advance_stage(epoch)
             new_stage = curriculum_manager.get_stage_index()
             print(f"[Curriculum] advance to stage {new_stage} \n")

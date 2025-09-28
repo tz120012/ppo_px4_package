@@ -1229,10 +1229,10 @@ class QuadcopterEnv(gym.Env):
 
         return {
             "rate_L0": dict(
-                w_pos_xy=0.3/3, w_pos_z=0.25, w_vel_xy=0.15, w_vel_z=0.1, w_att=0.1, w_omega=0.02
+                w_pos_xy=0.0, w_pos_z=0.25, w_vel_xy=0.5, w_vel_z=0.1, w_att=0.5, w_omega=0.2
             ),
             "att_L1": dict(
-                w_pos_xy=0.3/3, w_pos_z=0.25, w_vel_xy=0.15, w_vel_z=0.1, w_att=0.1, w_omega=0.02
+                w_pos_xy=0.0, w_pos_z=0.25, w_vel_xy=0.5, w_vel_z=0.1, w_att=0.5, w_omega=0.2
             ),
             "vel_L2": dict(
                 w_pos_xy=0.3, w_pos_z=0.25, w_vel_xy=0.15, w_vel_z=0.1, w_att=0.1, w_omega=0.02
