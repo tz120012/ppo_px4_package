@@ -288,3 +288,112 @@ python train_px4_ppo.py --use-curriculum=True
 
 v2.1.0 基于tianshou(ppo) + PX4 + Gazebo 实现模拟在线强化学习功能；
 v2.2.0 基于tianshou(ppo) + PX4 + Gazebo 实现手动控制测试，航线跟踪飞行测试
+
+
+
+## ####################################################################################################
+cd autodl-tmp && rm -rf ppo_px4_package
+git clone https://github.com/tz120012/ppo_px4_package.git
+
+tz120012 -- tianzh25@SYU
+vGPUs: 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
+###########################################################
+
+vGPU-1:  ssh -p 15919 root@connect.westc.gpuhub.com        		2BXzUvq6rQz4
+
+vGPU-2:  ssh -p 39048 root@connect.westb.seetacloud.com		bvXn/cOiqoz4
+
+vGPU-3:  ssh -p 26573 root@connect.westc.gpuhub.com			tkEAJcq9lURp
+
+vGPU-4: ssh -p 14899 root@connect.westc.gpuhub.com			yk+hPKVMAstV
+
+vGPU-5:  ssh -p 46654 root@connect.westc.gpuhub.com			2NxLLVHHSiwy
+
+vGPU-6: ssh -p 47913 root@connect.westc.gpuhub.com			RoQgM27nSp/Y
+
+4090:  ssh -p 32026 root@connect.cqa1.seetacloud.com			Z6rwaoc7XaIO
+
+############################################################
+
+# 重新连接 SSH
+
+# 断线后重连服务器，接回会话
+tmux attach -t rl    # 简写：tmux a -t rl
+
+# 启用鼠标（滚动、选择、切窗格/窗口）
+tmux set -g mouse on
+
+# 加大历史滚动缓冲（适合查看长日志）
+tmux set -g history-limit 100000
+
+############################################################
+->vGPU-1<-
+clear
+tmux new -s rl && tmux set -g mouse on
+
+conda activate tianshou_env
+cd /root/autodl-tmp/ppo_px4_package
+
+python train_px4_ppo.py --max-episode-steps=60 --rl-dt=0.5 --sim-dt=0.005 --epoch=1000 --step-per-epoch=512 --step-per-collect=128 --buffer-size=1024 --batch-size=64 --lr=3e-4 --repeat-per-collect=5 --training-num=16 --test-num=16 --gamma=0.99 --vf-coef=0.5 --ent-coef=0.02 --gae-lambda=0.95 --max-grad-norm=0.6 --eps-clip=0.25 --lr-decay=1 2>&1 | tee -a train_$(date +%F_%H%M).log
+
+
+->vGPU-2<-
+clear
+tmux new -s rl && tmux set -g mouse on
+
+conda activate tianshou_env
+cd /root/autodl-tmp/ppo_px4_package
+
+python train_px4_ppo.py --max-episode-steps=60 --rl-dt=0.5 --sim-dt=0.005 --epoch=1000 --step-per-epoch=1024 --step-per-collect=256 --buffer-size=2048 --batch-size=128 --lr=3e-4 --repeat-per-collect=5 --training-num=16 --test-num=16 --gamma=0.99 --vf-coef=0.5 --ent-coef=0.02 --gae-lambda=0.95 --max-grad-norm=0.6 --eps-clip=0.25 --lr-decay=1 2>&1 | tee -a train_$(date +%F_%H%M).log
+
+
+
+->vGPU-3<-
+clear
+tmux new -s rl && tmux set -g mouse on
+
+conda activate tianshou_env
+cd /root/autodl-tmp/ppo_px4_package
+
+python train_px4_ppo.py --max-episode-steps=60 --rl-dt=0.5 --sim-dt=0.005 --epoch=1000 --step-per-epoch=2048 --step-per-collect=512 --buffer-size=4096 --batch-size=256 --lr=3e-4 --repeat-per-collect=5 --training-num=16 --test-num=16 --gamma=0.99 --vf-coef=0.5 --ent-coef=0.02 --gae-lambda=0.95 --max-grad-norm=0.6 --eps-clip=0.25 --lr-decay=1 2>&1 | tee -a train_$(date +%F_%H%M).log
+
+
+
+->vGPU-4<-
+clear
+tmux new -s rl && tmux set -g mouse on
+
+conda activate tianshou_env
+cd /root/autodl-tmp/ppo_px4_package
+
+python train_px4_ppo.py --max-episode-steps=60 --rl-dt=0.5 --sim-dt=0.005 --epoch=1000 --step-per-epoch=512 --step-per-collect=128 --buffer-size=1024 --batch-size=64 --lr=3e-4 --repeat-per-collect=10 --training-num=16 --test-num=16 --gamma=0.99 --vf-coef=0.5 --ent-coef=0.02 --gae-lambda=0.95 --max-grad-norm=0.6 --eps-clip=0.25 --lr-decay=1 2>&1 | tee -a train_$(date +%F_%H%M).log
+
+->vGPU-6<-
+clear
+tmux new -s rl && tmux set -g mouse on
+
+conda activate tianshou_env
+cd /root/autodl-tmp/ppo_px4_package
+
+python train_px4_ppo.py --max-episode-steps=60 --rl-dt=0.5 --sim-dt=0.005 --epoch=1000 --step-per-epoch=1024 --step-per-collect=256 --buffer-size=2048 --batch-size=128 --lr=3e-4 --repeat-per-collect=10 --training-num=16 --test-num=16 --gamma=0.99 --vf-coef=0.5 --ent-coef=0.02 --gae-lambda=0.95 --max-grad-norm=0.6 --eps-clip=0.25 --lr-decay=1 2>&1 | tee -a train_$(date +%F_%H%M).log
+
+
+->4096<-
+clear
+tmux new -s rl && tmux set -g mouse on
+
+conda activate tianshou_env
+cd /root/autodl-tmp/ppo_px4_package
+
+python train_px4_ppo.py --max-episode-steps=60 --rl-dt=0.5 --sim-dt=0.005 --epoch=1000 --step-per-epoch=2048 --step-per-collect=512 --buffer-size=4096 --batch-size=256 --lr=3e-4 --repeat-per-collect=10 --training-num=16 --test-num=16 --gamma=0.99 --vf-coef=0.5 --ent-coef=0.02 --gae-lambda=0.95 --max-grad-norm=0.6 --eps-clip=0.25 --lr-decay=1 2>&1 | tee -a train_$(date +%F_%H%M).log
+
+
+############################################################
+
+250926-224416
+python train_px4_ppo.py --max-episode-steps=60 --rl-dt=0.5 --sim-dt=0.005 --epoch=200 --step-per-epoch=2048 --step-per-collect=512 --buffer-size=4096 --batch-size=256 --lr=3e-4 --repeat-per-collect=10 --training-num=16 --test-num=16 --gamma=0.99 --vf-coef=0.5 --ent-coef=0.01 --gae-lambda=0.95 --max-grad-norm=0.6 --eps-clip=0.25 --lr-decay=1 2>&1 | tee -a train_$(date +%F_%H%M).log
+
+
+## 课程学习
+python train_px4_ppo.py --use-curriculum --max-episode-steps=60 --rl-dt=0.5 --sim-dt=0.005 --epoch=200 --step-per-epoch=2048 --step-per-collect=512 --buffer-size=4096 --batch-size=256 --lr=3e-4 --repeat-per-collect=10 --training-num=16 --test-num=16 --gamma=0.99 --vf-coef=0.5 --ent-coef=0.01 --gae-lambda=0.95 --max-grad-norm=0.6 --eps-clip=0.25 --lr-decay=1 2>&1 | tee -a train_$(date +%F_%H%M).log
+############################################################
