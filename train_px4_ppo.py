@@ -183,14 +183,22 @@ class CurriculumManager:
             4:-100,         # L4 进阶阈值
         }
 
-        self.threshold_by_epochs = {
-            0:150,       # L0 进阶阈值
-            1:300,      # L1 进阶阈值
-            2:450,      # L2 进阶阈值
-            3:600,      # L3 进阶阈值
-            4:750,      # L4 进阶阈值
-        }
+        # self.threshold_by_epochs = {
+        #     0:150,          # L0 进阶阈值
+        #     1:300,          # L1 进阶阈值
+        #     2:450,          # L2 进阶阈值
+        #     3:600,          # L3 进阶阈值
+        #     4:750,          # L4 进阶阈值
+        # }
         
+        self.threshold_by_epochs = {
+            0:150,          # L0 进阶阈值
+            # 1:300,          # L1 进阶阈值
+            2:150,          # L2 进阶阈值
+            3:300,          # L3 进阶阈值
+            4:450,          # L4 进阶阈值
+        }
+
         # 记录评估历史
         self.eval_history: list[float] = []         # 单次评估分数
         self.window_buffer: list[float] = []        # 滑动窗口内的评估分数
@@ -210,27 +218,27 @@ class CurriculumManager:
             return None
         return sum(self.window_buffer) / len(self.window_buffer)
 
-    def should_advance(self, epoch: int) -> bool:
-        """基于滑动窗口 + 连续达标 + 冷却期判断是否升级"""
-        # 冷却期
-        if (epoch - self.last_advance_epoch) < self.cooldown_epochs:
-            return False
-        # 需要有窗口均值
-        avg = self.get_window_average()
-        if avg is None:
-            return False
-        # 当前阶段阈值
-        thr = self.thresholds.get(self.current_stage, None)
-        if thr is None:
-            return False
+    # def should_advance(self, epoch: int) -> bool:
+    #     """基于滑动窗口 + 连续达标 + 冷却期判断是否升级"""
+    #     # 冷却期
+    #     if (epoch - self.last_advance_epoch) < self.cooldown_epochs:
+    #         return False
+    #     # 需要有窗口均值
+    #     avg = self.get_window_average()
+    #     if avg is None:
+    #         return False
+    #     # 当前阶段阈值
+    #     thr = self.thresholds.get(self.current_stage, None)
+    #     if thr is None:
+    #         return False
 
-        # 判据：窗口均值 >= 阈值 -> streak +1，否则清零
-        if avg >= thr:
-            self.pass_streak += 1
-        else:
-            self.pass_streak = 0
+    #     # 判据：窗口均值 >= 阈值 -> streak +1，否则清零
+    #     if avg >= thr:
+    #         self.pass_streak += 1
+    #     else:
+    #         self.pass_streak = 0
 
-        return (self.pass_streak >= self.min_pass_count) and (self.current_stage < self.num_stages - 1)
+    #     return (self.pass_streak >= self.min_pass_count) and (self.current_stage < self.num_stages - 1)
 
     def should_advance_by_epochs(self, epoch: int) -> bool:
         """基于训练步数判断是否升级（仅供参考，未使用）"""
@@ -245,8 +253,17 @@ class CurriculumManager:
         return epoch >= thr and (self.current_stage < self.num_stages - 1)
 
 
+    # def advance_stage(self, epoch: int) -> dict:
+    #     self.current_stage = min(self.current_stage + 1, self.num_stages - 1)
+    #     self.last_advance_epoch = int(epoch)
+    #     self.pass_streak = 0
+
     def advance_stage(self, epoch: int) -> dict:
-        self.current_stage = min(self.current_stage + 1, self.num_stages - 1)
+        # 如果当前阶段是0，直接跳到阶段2（跳过阶段1）
+        if self.current_stage == 0:
+            self.current_stage = 2
+        else:
+            self.current_stage = min(self.current_stage + 1, self.num_stages - 1)
         self.last_advance_epoch = int(epoch)
         self.pass_streak = 0
 
