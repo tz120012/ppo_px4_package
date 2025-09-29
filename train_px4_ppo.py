@@ -36,7 +36,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--control-type", type=str, default="xyz_pos", choices=["xyz_pos", "xy_vel_z_pos", "xyz_vel"], help="Control mode for the quadcopter")
     parser.add_argument("--trajectory-type", type=int, default=5, help="Trajectory type (0-13)")
     parser.add_argument("--yaw-type", type=int, default=3, help="Yaw control type (0-4)")
-    parser.add_argument("--max-episode-steps", type=int, default=600, help="Maximum steps per episode")     ##
+    parser.add_argument("--max-episode-steps", type=int, default=60, help="Maximum steps per episode")     ##
     parser.add_argument("--rl-dt", type=float, default=0.5, help="RL decision timestep (seconds)")          ##
     parser.add_argument("--sim-dt", type=float, default=0.005, help="Simulation timestep (seconds)")        ##
     parser.add_argument("--wind-type", type=str, default="None", help="Wind disturbance type")                       
@@ -46,15 +46,15 @@ def get_args() -> argparse.Namespace:
 
     # 训练参数
     parser.add_argument("--seed", type=int, default=100)
-    parser.add_argument("--buffer-size", type=int, default=16384)                   ##
+    parser.add_argument("--buffer-size", type=int, default=4096)                    ##
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])  ##
-    parser.add_argument("--lr", type=float, default=1e-4)                           ##
+    parser.add_argument("--lr", type=float, default=3e-4)                           ##
     parser.add_argument("--gamma", type=float, default=0.99)                        ##
-    parser.add_argument("--epoch", type=int, default=100)                           ##
-    parser.add_argument("--step-per-epoch", type=int, default=32768)                ##
-    parser.add_argument("--step-per-collect", type=int, default=16384)              ## 4096
+    parser.add_argument("--epoch", type=int, default=1000)                           ##
+    parser.add_argument("--step-per-epoch", type=int, default=2048)                 ##
+    parser.add_argument("--step-per-collect", type=int, default=512)                ## 4096
     parser.add_argument("--repeat-per-collect", type=int, default=10)               ## 每次收集后重复更新6次，10次就太稳了
-    parser.add_argument("--batch-size", type=int, default=128)                      ##
+    parser.add_argument("--batch-size", type=int, default=256)                      ##
     parser.add_argument("--training-num", type=int, default=16)                     ##
     parser.add_argument("--test-num", type=int, default=16)                         ##
     
@@ -74,7 +74,7 @@ def get_args() -> argparse.Namespace:
     
     # 课程学习参数
     parser.add_argument("--use-curriculum", action="store_true", default=False, help="Enable curriculum learning")
-    parser.add_argument("--curriculum-stages", type=int, default=4, help="Number of curriculum stages")
+    parser.add_argument("--curriculum-stages", type=int, default=5, help="Number of curriculum stages")
     parser.add_argument("--stage-threshold", type=dict, default=None, help="Success rate threshold to advance stage")
     
     # 日志和保存
@@ -186,9 +186,9 @@ class CurriculumManager:
         self.threshold_by_epochs = {
             0:150,       # L0 进阶阈值
             1:300,      # L1 进阶阈值
-            2:500,      # L2 进阶阈值
-            3:800,      # L3 进阶阈值
-            4:1000,      # L4 进阶阈值
+            2:450,      # L2 进阶阈值
+            3:600,      # L3 进阶阈值
+            4:750,      # L4 进阶阈值
         }
         
         # 记录评估历史

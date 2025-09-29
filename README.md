@@ -395,5 +395,10 @@ python train_px4_ppo.py --max-episode-steps=60 --rl-dt=0.5 --sim-dt=0.005 --epoc
 
 
 ## 课程学习
-python train_px4_ppo.py --use-curriculum --max-episode-steps=60 --rl-dt=0.5 --sim-dt=0.005 --epoch=200 --step-per-epoch=2048 --step-per-collect=512 --buffer-size=4096 --batch-size=256 --lr=3e-4 --repeat-per-collect=10 --training-num=16 --test-num=16 --gamma=0.99 --vf-coef=0.5 --ent-coef=0.01 --gae-lambda=0.95 --max-grad-norm=0.6 --eps-clip=0.25 --lr-decay=1 2>&1 | tee -a train_$(date +%F_%H%M).log
+python train_px4_ppo.py --use-curriculum --max-episode-steps=60 --rl-dt=0.5 --sim-dt=0.005 --epoch=1000 --step-per-epoch=2048 --step-per-collect=512 --buffer-size=4096 --batch-size=256 --lr=3e-4 --repeat-per-collect=10 --training-num=16 --test-num=16 --gamma=0.99 --vf-coef=0.5 --ent-coef=0.01 --gae-lambda=0.95 --max-grad-norm=0.6 --eps-clip=0.25 --lr-decay=1 2>&1 | tee -a train_$(date +%F_%H%M).log
 ############################################################
+简化课程学习命令：
+默认：
+python train_px4_ppo.py --use-curriculum
+
+尝试调整参数值：--rl-dt=0.2  --lr=1e-4
