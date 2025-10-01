@@ -36,7 +36,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--control-type", type=str, default="xyz_pos", choices=["xyz_pos", "xy_vel_z_pos", "xyz_vel"], help="Control mode for the quadcopter")
     parser.add_argument("--trajectory-type", type=int, default=5, help="Trajectory type (0-13)")
     parser.add_argument("--yaw-type", type=int, default=3, help="Yaw control type (0-4)")
-    parser.add_argument("--max-episode-steps", type=int, default=60, help="Maximum steps per episode")     ##
+    parser.add_argument("--max-episode-steps", type=int, default=60, help="Maximum steps per episode")      ##
     parser.add_argument("--rl-dt", type=float, default=0.5, help="RL decision timestep (seconds)")          ##
     parser.add_argument("--sim-dt", type=float, default=0.005, help="Simulation timestep (seconds)")        ##
     parser.add_argument("--wind-type", type=str, default="None", help="Wind disturbance type")                       
@@ -46,13 +46,13 @@ def get_args() -> argparse.Namespace:
 
     # 训练参数
     parser.add_argument("--seed", type=int, default=100)
-    parser.add_argument("--buffer-size", type=int, default=4096)                    ##
+    parser.add_argument("--buffer-size", type=int, default=4096)                   ##
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])  ##
     parser.add_argument("--lr", type=float, default=3e-4)                           ##
     parser.add_argument("--gamma", type=float, default=0.99)                        ##
     parser.add_argument("--epoch", type=int, default=1000)                           ##
-    parser.add_argument("--step-per-epoch", type=int, default=2048)                 ##
-    parser.add_argument("--step-per-collect", type=int, default=512)                ## 4096
+    parser.add_argument("--step-per-epoch", type=int, default=2048)                ##
+    parser.add_argument("--step-per-collect", type=int, default=512)              ## 4096
     parser.add_argument("--repeat-per-collect", type=int, default=10)               ## 每次收集后重复更新6次，10次就太稳了
     parser.add_argument("--batch-size", type=int, default=256)                      ##
     parser.add_argument("--training-num", type=int, default=16)                     ##
@@ -75,8 +75,7 @@ def get_args() -> argparse.Namespace:
     # 课程学习参数
     parser.add_argument("--use-curriculum", action="store_true", default=False, help="Enable curriculum learning")
     parser.add_argument("--curriculum-stages", type=int, default=5, help="Number of curriculum stages")
-    parser.add_argument("--stage-threshold", type=dict, default=None, help="Success rate threshold to advance stage")
-    
+   
     # 日志和保存
     parser.add_argument("--logdir", type=str, default="log_px4")
     parser.add_argument("--render", type=float, default=0.0)
@@ -89,7 +88,6 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--watch", default=False, action="store_true", help="Watch the play of pre-trained policy only")
     
     return parser.parse_args()
-
 
 def make_px4_env(
     control_type: str,
@@ -153,95 +151,26 @@ def make_px4_env(
     
     return env, train_envs, test_envs
 
-
 class CurriculumManager:
     """课程学习管理器"""
     
-    def __init__(self, 
-                 num_stages: int = 5, 
-                 threshold: dict | None = None,
-                 window_size: int = 5,
-                 min_pass_count: int = 2,
-                 cooldown_epochs: int = 1,  # 升级后的冷却期，防止频繁升级
-                 start_stage: int = 0,
-                 ) -> None:
+    def __init__(self, num_stages: int = 5, start_stage: int = 1,) -> None:
         # 阶段数与索引
         self.num_stages = num_stages
         self.current_stage = int(start_stage)
         self.last_advance_epoch = -10**9  # 初始化为负值以允许立即升级
+        self.cooldown_epochs = 1 # 冷却期，避免阶段转换过于频繁
 
-        # 评估与判据
-        self.window_size = int(window_size)
-        self.min_pass_count = int(min_pass_count)
-        self.cooldown_epochs = int(cooldown_epochs)
-
-        self.thresholds = threshold or {
-            0:-70,         # L0 进阶阈值
-            1:-70,         # L1 进阶阈值
-            2:-10,         # L2 进阶阈值
-            3:-100,         # L3 进阶阈值
-            4:-100,         # L4 进阶阈值
-        }
-
-        # self.threshold_by_epochs = {
-        #     0:150,          # L0 进阶阈值
-        #     1:300,          # L1 进阶阈值
-        #     2:450,          # L2 进阶阈值
-        #     3:600,          # L3 进阶阈值
-        #     4:750,          # L4 进阶阈值
-        # }
-        
         self.threshold_by_epochs = {
-            0:150,          # L0 进阶阈值
-            # 1:300,          # L1 进阶阈值
-            2:150,          # L2 进阶阈值
-            3:300,          # L3 进阶阈值
-            4:450,          # L4 进阶阈值
+            1:150,      # 阶段1 → 阶段0
+            0:300,      # 阶段0 → 阶段2
+            2:450,      # 阶段2 → 阶段3
+            3:600,      # 阶段3 → 阶段4
+            4:750,      # 阶段4不再升级
         }
-
-        # 记录评估历史
-        self.eval_history: list[float] = []         # 单次评估分数
-        self.window_buffer: list[float] = []        # 滑动窗口内的评估分数
-        self.pass_streak: int = 0                   # 连续达标次数
-        
-
-    # 将一次评估结果（average reward）送入
-    def push_eval_score(self, score: float) -> None:
-        self.eval_history.append(float(score))
-        self.window_buffer.append(float(score))
-        if len(self.window_buffer) > self.window_size:
-            self.window_buffer.pop(0)
-
-    # 计算滑动窗口内的平均分
-    def get_window_average(self) -> float | None:
-        if not self.window_buffer:
-            return None
-        return sum(self.window_buffer) / len(self.window_buffer)
-
-    # def should_advance(self, epoch: int) -> bool:
-    #     """基于滑动窗口 + 连续达标 + 冷却期判断是否升级"""
-    #     # 冷却期
-    #     if (epoch - self.last_advance_epoch) < self.cooldown_epochs:
-    #         return False
-    #     # 需要有窗口均值
-    #     avg = self.get_window_average()
-    #     if avg is None:
-    #         return False
-    #     # 当前阶段阈值
-    #     thr = self.thresholds.get(self.current_stage, None)
-    #     if thr is None:
-    #         return False
-
-    #     # 判据：窗口均值 >= 阈值 -> streak +1，否则清零
-    #     if avg >= thr:
-    #         self.pass_streak += 1
-    #     else:
-    #         self.pass_streak = 0
-
-    #     return (self.pass_streak >= self.min_pass_count) and (self.current_stage < self.num_stages - 1)
 
     def should_advance_by_epochs(self, epoch: int) -> bool:
-        """基于训练步数判断是否升级（仅供参考，未使用）"""
+        """基于训练步数判断是否升级"""
         # 冷却期
         if (epoch - self.last_advance_epoch) < self.cooldown_epochs:
             return False
@@ -252,29 +181,25 @@ class CurriculumManager:
 
         return epoch >= thr and (self.current_stage < self.num_stages - 1)
 
-
-    # def advance_stage(self, epoch: int) -> dict:
-    #     self.current_stage = min(self.current_stage + 1, self.num_stages - 1)
-    #     self.last_advance_epoch = int(epoch)
-    #     self.pass_streak = 0
-
-    def advance_stage(self, epoch: int) -> dict:
-        # 如果当前阶段是0，直接跳到阶段2（跳过阶段1）
-        if self.current_stage == 0:
+    def advance_stage(self, epoch: int) -> None:
+        # 按照 1 -> 0 -> 2 -> 3 -> 4的顺序进行转换
+        if self.current_stage == 1:
+            self.current_stage = 0
+        elif self.current_stage == 0:
             self.current_stage = 2
-        else:
-            self.current_stage = min(self.current_stage + 1, self.num_stages - 1)
+        elif self.current_stage == 2:
+            self.current_stage = 3
+        elif self.current_stage == 3:
+            self.current_stage = 4
+        # 当 stage 为 4 时，不再改变
+
         self.last_advance_epoch = int(epoch)
-        self.pass_streak = 0
 
     def get_stage_index(self) -> int:
         return self.current_stage
 
     def reset(self):
-        self.current_stage = 0
-        self.eval_history.clear()
-        self.window_buffer.clear()
-        self.pass_streak = 0
+        self.current_stage = 1
         self.last_advance_epoch = -10**9  # 允许立即升级
 
 
@@ -431,13 +356,11 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         config_dict=vars(args),     # Tensorboard/W&B 记录所有超参配置，便于复现
     )
     
-
     # 课程学习管理器
     curriculum_manager = None
     if args.use_curriculum:
         curriculum_manager = CurriculumManager(
             num_stages=args.curriculum_stages,
-            threshold=args.stage_threshold
         )
         print("Curriculum learning enabled")
       
@@ -445,15 +368,6 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
     # -------------------------------------
     def train_fn(epoch: int, env_step: int) -> None:
         """在每个epoch开始时调用"""
-
-        # 1) 记录评估结果
-        last_reward = trainer.last_rew           # 找不到test_collector的eval结果，只能用trainer的last_rew
-        if last_reward is None:
-            print(f"Epoch {epoch}: no eval reward available yet")
-            return
-        curriculum_manager.push_eval_score(last_reward)
-
-        # 2) 判断是否升级
         if curriculum_manager.should_advance_by_epochs(epoch):
             curriculum_manager.advance_stage(epoch)
             new_stage = curriculum_manager.get_stage_index()
@@ -465,8 +379,6 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             except Exception as ex:
                 print(f"[Curriculum] Failed to update course stage on train envs: {ex}")
 
-
-
     # 保存最佳策略函数
     def save_best_fn(policy: BasePolicy) -> None:
         state = {
@@ -475,7 +387,6 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             "curriculum_stage": curriculum_manager.current_stage if curriculum_manager else 0,
         }
         torch.save(state, os.path.join(log_path, "best_policy.pth"))
-
 
     if not args.watch:
         # 训练器
