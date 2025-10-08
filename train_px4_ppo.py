@@ -50,7 +50,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])  ##
     parser.add_argument("--lr", type=float, default=3e-4)                           ##
     parser.add_argument("--gamma", type=float, default=0.99)                        ##
-    parser.add_argument("--epoch", type=int, default=1000)                           ##
+    parser.add_argument("--epoch", type=int, default=800)                           ##
     parser.add_argument("--step-per-epoch", type=int, default=2048)                ##
     parser.add_argument("--step-per-collect", type=int, default=512)              ## 4096
     parser.add_argument("--repeat-per-collect", type=int, default=10)               ## 每次收集后重复更新6次，10次就太稳了
@@ -162,11 +162,11 @@ class CurriculumManager:
         self.cooldown_epochs = 1 # 冷却期，避免阶段转换过于频繁
 
         self.threshold_by_epochs = {
-            1:150,      # 阶段1 → 阶段0
-            0:300,      # 阶段0 → 阶段2
-            2:450,      # 阶段2 → 阶段3
-            3:600,      # 阶段3 → 阶段4
-            4:750,      # 阶段4不再升级
+            0:150,      # 阶段1 → 阶段0
+            1:300,      # 阶段0 → 阶段2
+            2:400,      # 阶段2 → 阶段3
+            3:500,      # 阶段3 → 阶段4
+            4:600,      # 阶段4不再升级
         }
 
     def should_advance_by_epochs(self, epoch: int) -> bool:
@@ -182,10 +182,10 @@ class CurriculumManager:
         return epoch >= thr and (self.current_stage < self.num_stages - 1)
 
     def advance_stage(self, epoch: int) -> None:
-        # 按照 1 -> 0 -> 2 -> 3 -> 4的顺序进行转换
-        if self.current_stage == 1:
-            self.current_stage = 0
-        elif self.current_stage == 0:
+        # 按照 0 -> 1 -> 2 -> 3 -> 4的顺序进行转换
+        if self.current_stage == 0:
+            self.current_stage = 1
+        elif self.current_stage == 1:
             self.current_stage = 2
         elif self.current_stage == 2:
             self.current_stage = 3
