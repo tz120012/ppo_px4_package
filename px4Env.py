@@ -1181,44 +1181,44 @@ class QuadcopterEnv(gym.Env):
                 wind_velocity=1.0,
                 notes="enable attitude P; light wind",
             ),
-            dict(  # L2: + vel P/D（可选 I），中风  # 8字航线
-                control_type = self.ctrlOptions[0],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
-                trajectory_type=101,                # 当control_type = 1时，trajectory_type = 2: velocity
+            dict(  # L2: 全开，                     # 小幅随机轨迹
+                control_type = self.ctrlOptions[0], # 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
+                trajectory_type=103,                # trajectory_type = 5: minimum jerk, 
                 yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
                 averVel =  1,                       # 0：使用约定时间，1：使用平均速度                   
                 reward_preset="vel_L2",
                 open_mask_name="mask_vel_L2",
+                delta_k_scale = 1.0,      
+                rate_limit_scale=1.0,
+                wind_type = 'FIXED',
+                wind_velocity=3.0,
+                notes="full 20-dim open; strong wind/gusts",
+            ),
+            dict(  # L3: + vel P/D（可选 I），中风      # 8字航线
+                control_type = self.ctrlOptions[0],     # 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
+                trajectory_type=101,                    # 当control_type = 1时，trajectory_type = 2: velocity
+                yaw_type = 3,                           # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
+                averVel =  1,                           # 0：使用约定时间，1：使用平均速度                   
+                reward_preset="pos_L3",
+                open_mask_name="mask_pos_L3",
                 delta_k_scale = 0.8,                       
                 rate_limit_scale=0.8,
                 wind_type = 'FIXED',
                 wind_velocity=2.0,
                 notes="enable velocity loop; moderate wind",
             ),
-            dict(  # L3: + pos P，中强风            #复杂航线
-                control_type = self.ctrlOptions[0],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
+            dict(  # L4: + pos P，强风              #复杂航线
+                control_type = self.ctrlOptions[0], # 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
                 trajectory_type=102,                # trajectory_type = 5: minimum jerk, circle/figure-8
                 yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
                 averVel =  1,                       # 0：使用约定时间，1：使用平均速度                      
-                reward_preset="pos_L3",
-                open_mask_name="mask_pos_L3",
+                reward_preset="all_L4",
+                open_mask_name="mask_all_L4",
                 delta_k_scale = 0.8,       
                 rate_limit_scale=0.8,
                 wind_type = 'SINE',
                 wind_velocity=3.0,
                 notes="enable position loop; circle/figure-8",
-            ),
-            dict(  # L4: 全开，强风/突风            # 随机轨迹
-                control_type = self.ctrlOptions[0],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
-                trajectory_type=103,                # trajectory_type = 5: minimum jerk, 
-                yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
-                averVel =  1,                       # 0：使用约定时间，1：使用平均速度                   
-                reward_preset="all_L4",
-                open_mask_name="mask_all_L4",
-                delta_k_scale = 1.0,      
-                rate_limit_scale=1.0,
-                wind_type = 'SINE',
-                wind_velocity=3.0,
-                notes="full 20-dim open; strong wind/gusts",
             ),
         ]
 
