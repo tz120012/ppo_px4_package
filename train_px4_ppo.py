@@ -73,7 +73,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--recompute-adv", type=int, default=1)
     
     # 课程学习参数
-    parser.add_argument("--use-curriculum", action="store_true", default=False, help="Enable curriculum learning")
+    parser.add_argument("--use-curriculum", action="store_true", default=True, help="Enable curriculum learning")
     parser.add_argument("--curriculum-stages", type=int, default=5, help="Number of curriculum stages")
    
     # 日志和保存
@@ -154,7 +154,7 @@ def make_px4_env(
 class CurriculumManager:
     """课程学习管理器"""
     
-    def __init__(self, num_stages: int = 5, start_stage: int = 1,) -> None:
+    def __init__(self, num_stages: int = 5, start_stage: int = 0,) -> None:
         # 阶段数与索引
         self.num_stages = num_stages
         self.current_stage = int(start_stage)
@@ -162,11 +162,11 @@ class CurriculumManager:
         self.cooldown_epochs = 1 # 冷却期，避免阶段转换过于频繁
 
         self.threshold_by_epochs = {
-            0:150,      # 阶段1 → 阶段0
-            1:300,      # 阶段0 → 阶段2
-            2:400,      # 阶段2 → 阶段3
-            3:500,      # 阶段3 → 阶段4
-            4:600,      # 阶段4不再升级
+            0:150,      # 阶段0 → 阶段1
+            1:300,      # 阶段1 → 阶段2
+            2:450,      # 阶段2 → 阶段3
+            3:600,      # 阶段3 → 阶段4
+            4:750,      # 阶段4不再升级
         }
 
     def should_advance_by_epochs(self, epoch: int) -> bool:
@@ -199,7 +199,7 @@ class CurriculumManager:
         return self.current_stage
 
     def reset(self):
-        self.current_stage = 1
+        self.current_stage = 0
         self.last_advance_epoch = -10**9  # 允许立即升级
 
 
@@ -368,7 +368,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
     # -------------------------------------
     def train_fn(epoch: int, env_step: int) -> None:
         """在每个epoch开始时调用"""
-        if curriculum_manager.should_advance_by_epochs(epoch):
+        if curriculum_manager is not None and curriculum_manager.should_advance_by_epochs(epoch):
             curriculum_manager.advance_stage(epoch)
             new_stage = curriculum_manager.get_stage_index()
             print(f"[Curriculum] advance to stage {new_stage} \n")
@@ -384,8 +384,9 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         state = {
             "model": policy.state_dict(),
             "args": vars(args),
-            "curriculum_stage": curriculum_manager.current_stage if curriculum_manager else 0,
+            "curriculum_stage": curriculum_manager.current_stage if curriculum_manager is not None else 0,
         }
+        print(f"current curriculum stage: {curriculum_manager.current_stage if curriculum_manager else 0}")
         torch.save(state, os.path.join(log_path, "best_policy.pth"))
 
     if not args.watch:

@@ -126,9 +126,9 @@ class QuadcopterEnv(gym.Env):
 
         # 动作与观测掩码
         self.open_masks = {
-            "mask_rate_L0": np.array([0,0, 1,1, 1,1, 1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1], dtype=np.float32),
-            "mask_att_L1":  np.array([0,0, 1,1, 1,1, 1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1], dtype=np.float32),
-            "mask_vel_L2":  np.array([1,1, 1,1, 1,1, 1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1], dtype=np.float32),
+            "mask_rate_L0": np.array([0,0, 0,0, 0,0, 0,0, 0,0,0, 1,1,1, 1,1,1, 1,1,1], dtype=np.float32),
+            "mask_att_L1":  np.array([0,0, 0,0, 0,0, 0,0, 1,1,1, 1,1,1, 1,1,1, 1,1,1], dtype=np.float32),
+            "mask_vel_L2":  np.array([0,0, 1,1, 1,1, 1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1], dtype=np.float32),
             "mask_pos_L3":  np.array([1,1, 1,1, 1,1, 1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1], dtype=np.float32),
             "mask_all_L4":  np.ones(20, dtype=np.float32),
         }
@@ -188,16 +188,6 @@ class QuadcopterEnv(gym.Env):
 
         # 初始化上一时刻增益（基线） 这里用安全范围的中点作为默认基线
         mid = (self.pid_safe_min + self.pid_safe_max) / 2.0
-
-        # 将 20维中 (xy, z) 段展开为三轴，形成控制器需要的三轴字典
-        # pos_P_gains = (mid[0], mid[0], mid[1])
-        # vel_P_gains = (mid[2], mid[2], mid[3])
-        # vel_I_gains = (mid[4], mid[4], mid[5])
-        # vel_D_gains = (mid[6], mid[6], mid[7])
-        # att_P_gains = (mid[8], mid[9], mid[10])
-        # rate_P_gains = (mid[11], mid[12], mid[13])
-        # rate_I_gains = (mid[14], mid[15], mid[16])
-        # rate_D_gains = (mid[17], mid[18], mid[19])
 
         pos_P_gains = (2.0, 2.0, 1.5)
         vel_P_gains = (5.0, 5.0, 15.0)
@@ -388,7 +378,8 @@ class QuadcopterEnv(gym.Env):
             ]
             self._csv_writer.writerow(row)
             # 及时 flush，便于长跑中观察
-            self._csv_fh.flush()
+            if self._csv_fh is not None:
+                self._csv_fh.flush()
         except Exception as e:
             log.error(f"[step-csv] Write CSV failed: {e}")
 
@@ -454,14 +445,6 @@ class QuadcopterEnv(gym.Env):
         # 重置初始参数
         mid = (self.pid_safe_min + self.pid_safe_max) / 2.0
 
-        # pos_P_gains = (mid[0], mid[0], mid[1])
-        # vel_P_gains = (mid[2], mid[2], mid[3])
-        # vel_I_gains = (mid[4], mid[4], mid[5])
-        # vel_D_gains = (mid[6], mid[6], mid[7])
-        # att_P_gains = (mid[8], mid[9], mid[10])
-        # rate_P_gains = (mid[11], mid[12], mid[13])
-        # rate_I_gains = (mid[14], mid[15], mid[16])
-        # rate_D_gains = (mid[17], mid[18], mid[19])
         pos_P_gains = (2.0, 2.0, 1.5)
         vel_P_gains = (5.0, 5.0, 15.0)
         vel_I_gains = (60, 60, 3.0)
@@ -487,12 +470,16 @@ class QuadcopterEnv(gym.Env):
         self.ctrl.update_gains(self.pid_K_prev)
 
         # 最大速度
-        self.ctrl.velMax *= self.rate_limit_scale
-        self.ctrl.velMaxAll *= self.rate_limit_scale
+        if hasattr(self.ctrl, 'velMax') and isinstance(self.rate_limit_scale, (int, float)):
+            self.ctrl.velMax *= float(self.rate_limit_scale)
+        if hasattr(self.ctrl, 'velMaxAll') and isinstance(self.rate_limit_scale, (int, float)):
+            self.ctrl.velMaxAll *= float(self.rate_limit_scale)
         # 最大倾角
-        self.ctrl.tiltMax *= self.rate_limit_scale
+        if hasattr(self.ctrl, 'tiltMax') and isinstance(self.rate_limit_scale, (int, float)):
+            self.ctrl.tiltMax *= float(self.rate_limit_scale)
         # 最大角速度
-        self.ctrl.rateMax *= self.rate_limit_scale
+        if hasattr(self.ctrl, 'rateMax') and isinstance(self.rate_limit_scale, (int, float)):
+            self.ctrl.rateMax *= float(self.rate_limit_scale)
         
         # 重置仿真组件
         self._initialize_simulation()        
@@ -644,42 +631,6 @@ class QuadcopterEnv(gym.Env):
         self.render_data = self._pack_render_data(obs, self.step_action, self.step_reward)
 
         return obs, reward, terminated, truncated, info
-
-    # =========================
-    # 参数应用与仿真推进
-    # =========================
-    # def _apply_pid_parameters(self, action: np.ndarray):
-    #     """将归一化的动作转换为PID参数并应用到控制系统"""
-    #     pos_P_gains_from_action = self.pid_safe_min[0:2] + (self.pid_safe_max[0:2] - self.pid_safe_min[0:2]) * action[0:2]
-    #     vel_P_gains_from_action = self.pid_safe_min[2:4] + (self.pid_safe_max[2:4] - self.pid_safe_min[2:4]) * action[2:4]
-    #     vel_I_gains_from_action = self.pid_safe_min[4:6] + (self.pid_safe_max[4:6] - self.pid_safe_min[4:6]) * action[4:6]
-    #     vel_D_gains_from_action = self.pid_safe_min[6:8] + (self.pid_safe_max[6:8] - self.pid_safe_min[6:8]) * action[6:8]
-    #     att_P_gains_from_action = self.pid_safe_min[8:11] + (self.pid_safe_max[8:11] - self.pid_safe_min[8:11]) * action[8:11]
-    #     rate_P_gains_from_action = self.pid_safe_min[11:14] + (self.pid_safe_max[11:14] - self.pid_safe_min[11:14]) * action[11:14]
-    #     rate_I_gains_from_action = self.pid_safe_min[14:17] + (self.pid_safe_max[14:17] - self.pid_safe_min[14:17]) * action[14:17]
-    #     rate_D_gains_from_action = self.pid_safe_min[17:20] + (self.pid_safe_max[17:20] - self.pid_safe_min[17:20]) * action[17:20]
-
-    #     # 将XY共用参数复制展开为三轴
-    #     pos_P_gains = (pos_P_gains_from_action[0], pos_P_gains_from_action[0], pos_P_gains_from_action[1])
-    #     vel_P_gains = (vel_P_gains_from_action[0], vel_P_gains_from_action[0], vel_P_gains_from_action[1])
-    #     vel_I_gains = (vel_I_gains_from_action[0], vel_I_gains_from_action[0], vel_I_gains_from_action[1])
-    #     vel_D_gains = (vel_D_gains_from_action[0], vel_D_gains_from_action[0], vel_D_gains_from_action[1])
-    #     att_P_gains = att_P_gains_from_action
-    #     rate_P_gains = rate_P_gains_from_action
-    #     rate_I_gains = rate_I_gains_from_action
-    #     rate_D_gains = rate_D_gains_from_action
-
-    #     gains_from_action = {
-    #         'pos_P_gains': pos_P_gains,
-    #         'vel_P_gains': vel_P_gains,
-    #         'vel_I_gains': vel_I_gains,
-    #         'vel_D_gains': vel_D_gains,
-    #         'att_P_gains': att_P_gains,
-    #         'rate_P_gains': rate_P_gains,
-    #         'rate_I_gains': rate_I_gains,
-    #         'rate_D_gains': rate_D_gains,
-    #     }
-    #     self.ctrl.update_gains(gains_from_action)
     
     def _apply_pid_parameters(self, action: np.ndarray) -> dict:
         """
@@ -742,16 +693,17 @@ class QuadcopterEnv(gym.Env):
         K_prev_vec = _pack_prev_to_vec(self.pid_K_prev)  # shape (20,)
 
         # 3) 速率限制（逐元素限制每步变化量）
-        if hasattr(self, "rate_limit") and self.rate_limit is not None:
-            rate_lim = np.asarray(self.rate_limit, dtype=np.float32)
-            if rate_lim.shape == ():
-                rate_lim = np.full_like(K_target, float(rate_lim))
-            elif rate_lim.shape != K_target.shape:
-                raise ValueError(f"rate_limit shape mismatch: {rate_lim.shape} vs {K_target.shape}")
-            dK = np.clip(K_target - K_prev_vec, -rate_lim, rate_lim)
-            K_rate_limited = K_prev_vec + dK
-        else:
-            K_rate_limited = K_target
+        # 注释掉有问题的 rate_limit 代码，因为该属性未定义
+        # if hasattr(self, "rate_limit") and self.rate_limit is not None:
+        #     rate_lim = np.asarray(self.rate_limit, dtype=np.float32)
+        #     if rate_lim.shape == ():
+        #         rate_lim = np.full_like(K_target, float(rate_lim))
+        #     elif rate_lim.shape != K_target.shape:
+        #         raise ValueError(f"rate_limit shape mismatch: {rate_lim.shape} vs {K_target.shape}")
+        #     dK = np.clip(K_target - K_prev_vec, -rate_lim, rate_lim)
+        #     K_rate_limited = K_prev_vec + dK
+        # else:
+        K_rate_limited = K_target
 
         # 4) 一阶平滑
         alpha = getattr(self, "alpha", 1.0)
@@ -834,17 +786,6 @@ class QuadcopterEnv(gym.Env):
             pos_fb, vel_fb, eul_fb, omega_fb
         ])
         return obs.astype(np.float32)
-
-        # 将obs,action,reward打包为一维数组，便于渲染    
-    # def _pack_render_data(self, obs, action, reward):
-    #     obs = np.ravel(obs)  # (n,)
-    #     # 离散动作：转为标量数组；连续动作：拍扁
-    #     if np.isscalar(action):
-    #         action = np.array([action])
-    #     else:
-    #         action = np.ravel(action)
-    #     reward = np.atleast_1d(reward).astype(np.float32)  # (1,)
-    #     return np.concatenate([obs, action, reward], axis=0)
     
     def _pack_render_data(self, obs, action=None, reward=None):
         # 统一类型
@@ -939,26 +880,6 @@ class QuadcopterEnv(gym.Env):
             # "vel_err_vec": vel_err_vec,
         }
 
-    # def _dense_reward_instant(self, m) -> float:
-    #     """
-    #     即时（密集）奖励：每个仿真子步计算。
-    #     - 分轴位置误差（XY、Z分权）
-    #     - 速度跟踪误差（相对 v_ref）
-    #     - 姿态误差（phi、theta 分开）
-    #     - 角速度范数
-    #     """
-    #     rw = self.reward_weights
-    #     dense = -(
-    #         rw["w_pos_xy"] * m["pos_err_xy"] +
-    #         rw["w_pos_z"]  * m["pos_err_z"]  +
-    #         rw["w_vel_xy"] * m["vel_err_xy"] +
-    #         rw["w_vel_z"]  * m["vel_err_z"]  +
-    #         rw["w_att"]    * m["att_norm"]   +
-    #         rw["w_omega"]  * m["omega_norm"]
-    #     )
-    #     return float(self.dense_reward_scale * dense)
-
-
     def _collect_step_sample(self, m: Dict[str, Any], prev_cache: Dict[str, Any]) -> Dict[str, float]:
         """
         在本步子步中收集一次原子指标，用于步末聚合。
@@ -984,7 +905,7 @@ class QuadcopterEnv(gym.Env):
             if prev_cache.get("w_cmd") is not None and self.ctrl.w_cmd is not None:
                 du = float(np.linalg.norm(self.ctrl.w_cmd - prev_cache["w_cmd"]))
 
-        # 归一到每秒变化率（与原逻辑一致）
+        # 归一到每秒变化率
         if self.limits.get("normalize_rate_by_dt", True) and self.dt > 0:
             inv_dt = 1.0 / self.dt
             dv *= inv_dt
@@ -1066,6 +987,10 @@ class QuadcopterEnv(gym.Env):
         overshoot_hits_norm = overshoot_hits / 100      # 归一化，避免过大影响
 
         sw = self.segment_weights
+        if sw is None:
+            # 如果 segment_weights 为 None，返回默认奖励
+            return 0.0, {}
+            
         segment_reward = -(
             sw["W_pos_xy"] * rmse_pos_xy +
             sw["W_pos_z"]  * rmse_pos_z  +
@@ -1155,31 +1080,44 @@ class QuadcopterEnv(gym.Env):
             return curriculum_cfg["stage_configs"]
         # 配置列表
         return [
-            dict(  # L0: rate P/D 优先              # 速度随机阶跃
-                control_type = self.ctrlOptions[1],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
-                trajectory_type=201,                # 当control_type = 1时，trajectory_type = 0: rate
-                yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
-                averVel =  0,                       # 0：使用约定时间，1：使用平均速度                  
-                reward_preset="rate_L0",            # 调整奖励权重，不同的课程等级重点奖励位置不同
-                open_mask_name="mask_rate_L0",      # 调整开放的PID参数，不同的课程等级开放不同的参数
-                delta_k_scale = 0.5,                # PID参数增量缩放,用于限制每步动作对PID参数的影响
-                rate_limit_scale=0.5,               # 速率限制缩放,用于限制最大速度/最大角速度
-                wind_type = 'None',                 # 风类型：0无风，1恒定风，2随机风
-                wind_velocity=0.0,                  # 用于调整风速大小
-                notes="stabilize rate loop; minimal disturbance",
-            ),
-            dict(  # L1: + att P，小风              # 速度扫频扫幅
+            # dict(  # L0: rate P/D 优先              # 速度随机阶跃
+            #     control_type = self.ctrlOptions[1],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
+            #     trajectory_type=201,                # 当control_type = 1时，trajectory_type = 0: rate
+            #     yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
+            #     averVel =  0,                       # 0：使用约定时间，1：使用平均速度                  
+            #     reward_preset="rate_L0",            # 调整奖励权重，不同的课程等级重点奖励位置不同
+            #     open_mask_name="mask_rate_L0",      # 调整开放的PID参数，不同的课程等级开放不同的参数
+            #     delta_k_scale = 1.0,                # PID参数增量缩放,用于限制每步动作对PID参数的影响
+            #     rate_limit_scale=0.5,               # 速率限制缩放,用于限制最大速度/最大角速度
+            #     wind_type = 'None',                 # 风类型：0无风，1恒定风，2随机风
+            #     wind_velocity=0.0,                  # 用于调整风速大小
+            #     notes="stabilize rate loop; minimal disturbance",
+            # ),
+            dict(  # L0: + att P，小风              # 速度扫频扫幅
                 control_type = self.ctrlOptions[1],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
                 trajectory_type = 202,              # 当control_type = 1时，trajectory_type = 1: attitude
                 yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
                 averVel =  0,                       # 0：使用约定时间，1：使用平均速度                   
                 reward_preset="att_L1",
                 open_mask_name="mask_att_L1",
-                delta_k_scale = 0.5,       
-                rate_limit_scale=0.5,
+                delta_k_scale = 1.0,       
+                rate_limit_scale=1.0,
                 wind_type = 'FIXED',                
                 wind_velocity=1.0,
                 notes="enable attitude P; light wind",
+            ),
+            dict(  # L1: rate P/D 优先              # 速度随机阶跃
+                control_type = self.ctrlOptions[1],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
+                trajectory_type=201,                # 当control_type = 1时，trajectory_type = 0: rate
+                yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
+                averVel =  0,                       # 0：使用约定时间，1：使用平均速度                  
+                reward_preset="rate_L0",            # 调整奖励权重，不同的课程等级重点奖励位置不同
+                open_mask_name="mask_rate_L0",      # 调整开放的PID参数，不同的课程等级开放不同的参数
+                delta_k_scale = 1.0,                # PID参数增量缩放,用于限制每步动作对PID参数的影响
+                rate_limit_scale=0.5,               # 速率限制缩放,用于限制最大速度/最大角速度
+                wind_type = 'None',                 # 风类型：0无风，1恒定风，2随机风
+                wind_velocity=0.0,                  # 用于调整风速大小
+                notes="stabilize rate loop; minimal disturbance",
             ),
             dict(  # L2: 全开，                     # 小幅随机轨迹
                 control_type = self.ctrlOptions[0], # 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
@@ -1189,7 +1127,7 @@ class QuadcopterEnv(gym.Env):
                 reward_preset="vel_L2",
                 open_mask_name="mask_vel_L2",
                 delta_k_scale = 1.0,      
-                rate_limit_scale=1.0,
+                rate_limit_scale=0.5,
                 wind_type = 'FIXED',
                 wind_velocity=3.0,
                 notes="full 20-dim open; strong wind/gusts",
@@ -1201,7 +1139,7 @@ class QuadcopterEnv(gym.Env):
                 averVel =  1,                           # 0：使用约定时间，1：使用平均速度                   
                 reward_preset="pos_L3",
                 open_mask_name="mask_pos_L3",
-                delta_k_scale = 0.8,                       
+                delta_k_scale = 1.0,                       
                 rate_limit_scale=0.8,
                 wind_type = 'FIXED',
                 wind_velocity=2.0,
@@ -1214,7 +1152,7 @@ class QuadcopterEnv(gym.Env):
                 averVel =  1,                       # 0：使用约定时间，1：使用平均速度                      
                 reward_preset="all_L4",
                 open_mask_name="mask_all_L4",
-                delta_k_scale = 0.8,       
+                delta_k_scale = 1.0,       
                 rate_limit_scale=0.8,
                 wind_type = 'SINE',
                 wind_velocity=3.0,
@@ -1229,10 +1167,10 @@ class QuadcopterEnv(gym.Env):
 
         return {
             "rate_L0": dict(
-                w_pos_xy=0.0, w_pos_z=0.25, w_vel_xy=0.5, w_vel_z=0.1, w_att=0.5, w_omega=0.2
+                w_pos_xy=0.0, w_pos_z=0.25, w_vel_xy=1.0, w_vel_z=1.0, w_att=0.5, w_omega=0.2
             ),
             "att_L1": dict(
-                w_pos_xy=0.0, w_pos_z=0.25, w_vel_xy=0.5, w_vel_z=0.1, w_att=0.5, w_omega=0.2
+                w_pos_xy=0.0, w_pos_z=0.25, w_vel_xy=1.0, w_vel_z=1.0, w_att=0.5, w_omega=0.2
             ),
             "vel_L2": dict(
                 w_pos_xy=0.3, w_pos_z=0.25, w_vel_xy=0.15, w_vel_z=0.1, w_att=0.1, w_omega=0.02
@@ -1252,13 +1190,13 @@ class QuadcopterEnv(gym.Env):
 
         return {
             "rate_L0": dict(
-                W_pos_xy=0.3/3, W_pos_z=0.25, W_vel_xy=0.15, W_vel_z=0.1,
+                W_pos_xy=0.3, W_pos_z=0.25, W_vel_xy=0.5, W_vel_z=0.1,
                 W_att=0.1, W_omega=0.02,
                 W_u=0.0, W_dv=0.0, W_domega=0.0, W_du=0.0,              # 控制能量与平滑不纳入奖励(暂不开启) / W_u=0.05, W_dv=0.06, W_domega=0.07, W_du=0.08,
                 W_sat=0.15, W_over=0.15,
             ),
             "att_L1": dict(
-                W_pos_xy=0.3/3, W_pos_z=0.25, W_vel_xy=0.15, W_vel_z=0.1,
+                W_pos_xy=0.3, W_pos_z=0.25, W_vel_xy=0.5, W_vel_z=0.1,
                 W_att=0.1, W_omega=0.02,
                 W_u=0.0, W_dv=0.0, W_domega=0.0, W_du=0.0,              # 控制能量与平滑不纳入奖励(暂不开启) / W_u=0.05, W_dv=0.06, W_domega=0.07, W_du=0.08,
                 W_sat=0.15, W_over=0.15,
@@ -1295,19 +1233,19 @@ class QuadcopterEnv(gym.Env):
 
         # b) 按 reward_preset设置奖励权重
         reward_preset = cfg.get("reward_preset")
-        if reward_preset is not None:
+        if reward_preset is not None and isinstance(reward_preset, str):
             self.reward_weights = dict(self.reward_weights_presets[reward_preset])
             self.segment_weights = dict(self.segment_weights_presets[reward_preset])
         else:
-            self.reward_weights = dict(self.reward_weights_presets["all_L4"])
-            self.segment_weights = dict(self.reward_weights_presets["all_L4"])
+            self.reward_weights = dict(self.reward_weights_presets["all_L4"]) 
+            self.segment_weights = dict(self.segment_weights_presets["all_L4"])
 
         # c) 设置 open_mask
         mask_name = cfg.get("open_mask_name")
         if mask_name in self.open_masks:
             self.open_mask = self.open_masks[mask_name].copy()
         else:
-            self.open_mask = self.open_mask["mask_all_L4"].copy()
+            self.open_mask = self.open_masks["mask_all_L4"].copy()
 
         # d) 应用 delta_K_scale 和 rate_limit
         self.delta_K_scale = cfg.get("delta_k_scale", 0.5)
@@ -1419,7 +1357,7 @@ class QuadcopterEnv(gym.Env):
             }
             if need_act_axis:
                 self._lines["act"] = {"all": []}
-                self._act_dim = int(act1d.size)
+                self._act_dim = int(act1d.size) if act1d is not None else 20
             if need_rew_axis:
                 self._lines["rew"] = {"all": []}
 
@@ -1562,9 +1500,11 @@ class QuadcopterEnv(gym.Env):
                     pass
                 self._figure_shown = True
 
-            self._fig.canvas.draw()
+            if self._fig is not None and hasattr(self._fig, 'canvas'):
+                self._fig.canvas.draw()
             try:
-                self._fig.canvas.flush_events()
+                if self._fig is not None and hasattr(self._fig, 'canvas'):
+                    self._fig.canvas.flush_events()
                 plt.pause(0.001)  # 让 GUI 事件循环跑一下
             except Exception:
                 pass
@@ -1624,14 +1564,16 @@ class QuadcopterEnv(gym.Env):
             pass
 
     def _save_render_figure(self, path=None, dpi=150):
-        if getattr(self, "_render_inited", False):
+        if getattr(self, "_render_inited", False) and self._fig is not None:
             import os
-            os.makedirs(getattr(self, "save_dir", "./log_render_exports"), exist_ok=True)
+            save_dir = getattr(self, "save_dir", "./log_render_exports")
+            os.makedirs(save_dir, exist_ok=True)
             if path is None:
                 ep = getattr(self, "_episode_index", 0)
-                path = os.path.join(self.save_dir, f"episode_{ep:04d}.png")
-            self._fig.savefig(path, dpi=dpi, bbox_inches="tight")
-            print(f"[render] figure saved to: {path}")
+                path = os.path.join(save_dir, f"episode_{ep:04d}.png")
+            if hasattr(self._fig, 'savefig'):
+                self._fig.savefig(path, dpi=dpi, bbox_inches="tight")
+                print(f"[render] figure saved to: {path}")
 
     def close(self):
         try:

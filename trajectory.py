@@ -129,7 +129,7 @@ def minSomethingTraj(waypoints, times, order):
 
     # 终点导数(1..order-1) = 0
     for k in range(1, order):
-        A[2*n+(order-1)+k-1][-nb_coeff:] = get_poly_cc(nb_coeff, k, times[i])
+        A[2*n+(order-1)+k-1][-nb_coeff:] = get_poly_cc(nb_coeff, k, times[-1])
 
     # 中间航点连续性
     for i in range(n-1):
@@ -196,7 +196,7 @@ def minSomethingTraj_faststop(waypoints, times, order):
     for k in range(2, order):
         A[4*n+k-2][:nb_coeff] = get_poly_cc(nb_coeff, k, 0)
     for k in range(2, order):
-        A[4*n+k-2+(order-2)][-nb_coeff:] = get_poly_cc(nb_coeff, k, times[i])
+        A[4*n+k-2+(order-2)][-nb_coeff:] = get_poly_cc(nb_coeff, k, times[-1])
 
     # 中间航点高阶导连续
     for i in range(n-1):
@@ -386,6 +386,11 @@ class Trajectory:
         if t_mod >= self.t_wps[-1]:
             return -1, self.wps[-1, :]
         t_idx = self._locate_t_index_left(t_mod)
+        
+        # 检查 T_segment 是否为 None
+        if self.T_segment is None:
+            raise Exception("T_segment 未初始化，无法进行插值计算。")
+        
         scale = (t_mod - self.t_wps[t_idx]) / self.T_segment[t_idx]
         desPos = (1 - scale) * self.wps[t_idx, :] + scale * self.wps[t_idx + 1, :]
         return t_idx, desPos
@@ -393,7 +398,13 @@ class Trajectory:
     def _pos_waypoint_min(self, t_mod):
         if len(self.t_wps) != self.wps.shape[0]:
             raise Exception("时间数组和航点数组大小不一致。")
+        
+        # 检查 deriv_order 是否为 None
+        if self.deriv_order is None:
+            raise Exception("deriv_order 未初始化，无法进行最小导数轨迹计算。")
+        
         nb_coeff = self.deriv_order * 2
+        
         if t_mod <= self.t_wps[0]:
             t_idx = 0
             desPos = self.wps[0, :]
@@ -415,6 +426,10 @@ class Trajectory:
         t0 = get_poly_cc(nb_coeff, 0, tau)
         t1 = get_poly_cc(nb_coeff, 1, tau)
         t2 = get_poly_cc(nb_coeff, 2, tau)
+
+        # 检查系数数组是否为 None
+        if self.coeff_x is None or self.coeff_y is None or self.coeff_z is None:
+            raise Exception("轨迹系数未初始化，无法计算期望状态。")
 
         desPos = np.array([
             self.coeff_x[start:end].dot(t0),
@@ -484,6 +499,11 @@ class Trajectory:
             raise Exception("时间数组和偏航数组大小不一致。")
         if (t_mod <= self.t_wps[0]) or (t_mod >= self.t_wps[-1]):
             return self.y_wps[t_idx]
+        
+        # 检查 T_segment 是否为 None
+        if self.T_segment is None:
+            raise Exception("T_segment 未初始化，无法进行航向插值计算。")
+        
         scale = (t_mod - self.t_wps[t_idx]) / self.T_segment[t_idx]
         desYaw = (1 - scale) * self.y_wps[t_idx] + scale * self.y_wps[t_idx + 1]
         return desYaw
@@ -496,7 +516,7 @@ class Trajectory:
                 desYaw = self.y_wps[t_idx]
             else:
                 desYaw = np.arctan2(desVel[1], desVel[0])
-        if (np.sign(desYaw) - np.sign(self.current_heading)) and abs(desYaw - self.current_heading) >= 2 * pi - 0.1:
+        if (np.sign(desYaw) - np.sign(self.current_heading)) and abs(float(desYaw) - float(self.current_heading)) >= 2 * pi - 0.1:
             self.current_heading = self.current_heading + np.sign(desYaw) * 2 * pi
         desYawRate = (desYaw - self.current_heading) / Ts
         self.current_heading = desYaw
@@ -539,12 +559,30 @@ class Trajectory:
         desPQR = np.zeros(3)
         desYawRate = 0.0
 
-        f = sweep_f(t) if callable(sweep_f) else 0.25
-        w = 2*np.pi*f
+        # 检查 sweep_f 参数是否为 None 并转换为数值
+        f_val = sweep_f(t) if callable(sweep_f) else 0.25
+        if f_val is None:
+            f_val = 0.25
+        # 确保 f_val 是数值类型
+        if not isinstance(f_val, (int, float, np.number)):
+            f_val = 0.25
+        w = 2*np.pi*float(f_val)
 
-        amp_vx = (amp_f_vx(t) if callable(amp_f_vx) else 1.0)
-        amp_vy = (amp_f_vy(t) if callable(amp_f_vy) else 1.0)
-        amp_vz = (amp_f_vz(t) if callable(amp_f_vz) else 0.0)
+        # 检查幅值函数返回值并转换为数值
+        amp_vx_val = amp_f_vx(t) if callable(amp_f_vx) else 1.0
+        amp_vy_val = amp_f_vy(t) if callable(amp_f_vy) else 1.0 
+        amp_vz_val = amp_f_vz(t) if callable(amp_f_vz) else 0.0
+        
+        if amp_vx_val is None or not isinstance(amp_vx_val, (int, float, np.number)):
+            amp_vx_val = 1.0
+        if amp_vy_val is None or not isinstance(amp_vy_val, (int, float, np.number)):
+            amp_vy_val = 1.0
+        if amp_vz_val is None or not isinstance(amp_vz_val, (int, float, np.number)):
+            amp_vz_val = 0.0
+            
+        amp_vx = float(amp_vx_val)
+        amp_vy = float(amp_vy_val)
+        amp_vz = float(amp_vz_val)
 
         vx = amp_vx * np.sin(w*t + phase_offset + 0.0)
         vy = amp_vy * np.sin(w*t + phase_offset + np.pi/2.0)
@@ -561,7 +599,7 @@ class Trajectory:
     
     # stage = 2
     def altitude_pos_figure8(self, t, z=1.0,
-                            A=5.0, B=3.0, omega=0.4, phase=np.pi/2,
+                            A=3.0, B=1.0, omega=0.4, phase=np.pi/2,
                             center=np.array([0.0, 0.0])):
         """8字航线（李萨如型），定高 z
         x = A * sin(omega * t)
