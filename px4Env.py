@@ -186,17 +186,38 @@ class QuadcopterEnv(gym.Env):
             0.01, 0.01, 0.01    # rate_D_gains
         ])
 
-        # 初始化上一时刻增益（基线） 这里用安全范围的中点作为默认基线
-        mid = (self.pid_safe_min + self.pid_safe_max) / 2.0
+        # # 使用最小值作为默认基线
+        # pos_P_gains = (0.1, 0.1, 0.1)   
+        # vel_P_gains = (1.2, 1.2, 2.0)  
+        # vel_I_gains = (0.1, 0.1, 0.2)
+        # vel_D_gains = (0.1, 0.1, 0.1)
+        # att_P_gains = (0.1, 0.1, 0.1) 
+        # rate_P_gains = (0.01, 0.01, 0.01)
+        # rate_I_gains = (0.01, 0.01, 0.01)
+        # rate_D_gains = (0.01, 0.01, 0.01)
 
-        pos_P_gains = (2.0, 2.0, 1.5)
-        vel_P_gains = (5.0, 5.0, 15.0)
-        vel_I_gains = (60, 60, 3.0)
-        vel_D_gains = (2.0, 2.0, 2.0)
-        att_P_gains = (12.0, 12.0, 5.0)
-        rate_P_gains = (0.5, 0.6, 0.6)
-        rate_I_gains = (10.0, 10.0, 10.0)
-        rate_D_gains = (0.01, 0.01, 0.01)
+
+        # # 使用最大值作为默认基线
+        # pos_P_gains = (2.0, 2.0, 1.5)
+        # vel_P_gains = (5.0, 5.0, 15.0)
+        # vel_I_gains = (60, 60, 3.0)
+        # vel_D_gains = (2.0, 2.0, 2.0)
+        # att_P_gains = (12.0, 12.0, 5.0)
+        # rate_P_gains = (0.5, 0.6, 0.6)
+        # rate_I_gains = (10.0, 10.0, 10.0)
+        # rate_D_gains = (0.01, 0.01, 0.01)
+
+
+        # 使用中间值作为默认基线
+        mid = (self.pid_safe_min + self.pid_safe_max) / 2.0
+        pos_P_gains = (mid[0],mid[0],mid[1])  
+        vel_P_gains = (mid[2],mid[2],mid[3])  
+        vel_I_gains = (mid[4],mid[4],mid[5]) 
+        vel_D_gains = (mid[6],mid[6],mid[7]) 
+        att_P_gains = (mid[8],mid[9],mid[10])  
+        rate_P_gains = (mid[11],mid[12],mid[13]) 
+        rate_I_gains = (mid[14],mid[15],mid[16]) 
+        rate_D_gains = (mid[17],mid[18],mid[19]) 
 
 
         self.pid_K_prev = {
@@ -442,18 +463,39 @@ class QuadcopterEnv(gym.Env):
         if options is not None and 'target_pos' in options:
             self.target_pos = np.array(options['target_pos'])
 
-        # 重置初始参数
-        mid = (self.pid_safe_min + self.pid_safe_max) / 2.0
+        # # 使用最小值作为默认基线
+        # pos_P_gains = (0.1, 0.1, 0.1)   
+        # vel_P_gains = (1.2, 1.2, 2.0)  
+        # vel_I_gains = (0.1, 0.1, 0.2)
+        # vel_D_gains = (0.1, 0.1, 0.1)
+        # att_P_gains = (0.1, 0.1, 0.1) 
+        # rate_P_gains = (0.01, 0.01, 0.01)
+        # rate_I_gains = (0.01, 0.01, 0.01)
+        # rate_D_gains = (0.01, 0.01, 0.01)
 
-        pos_P_gains = (2.0, 2.0, 1.5)
-        vel_P_gains = (5.0, 5.0, 15.0)
-        vel_I_gains = (60, 60, 3.0)
-        vel_D_gains = (2.0, 2.0, 2.0)
-        att_P_gains = (12.0, 12.0, 5.0)
-        rate_P_gains = (0.5, 0.6, 0.6)
-        rate_I_gains = (10.0, 10.0, 10.0)
-        rate_D_gains = (0.01, 0.01, 0.01)
-        
+
+        # # 使用最大值作为默认基线
+        # pos_P_gains = (2.0, 2.0, 1.5)
+        # vel_P_gains = (5.0, 5.0, 15.0)
+        # vel_I_gains = (60, 60, 3.0)
+        # vel_D_gains = (2.0, 2.0, 2.0)
+        # att_P_gains = (12.0, 12.0, 5.0)
+        # rate_P_gains = (0.5, 0.6, 0.6)
+        # rate_I_gains = (10.0, 10.0, 10.0)
+        # rate_D_gains = (0.01, 0.01, 0.01)
+
+
+        # 使用中间值作为默认基线
+        mid = (self.pid_safe_min + self.pid_safe_max) / 2.0
+        pos_P_gains = (mid[0],mid[0],mid[1])  
+        vel_P_gains = (mid[2],mid[2],mid[3])  
+        vel_I_gains = (mid[4],mid[4],mid[5]) 
+        vel_D_gains = (mid[6],mid[6],mid[7]) 
+        att_P_gains = (mid[8],mid[9],mid[10])  
+        rate_P_gains = (mid[11],mid[12],mid[13]) 
+        rate_I_gains = (mid[14],mid[15],mid[16]) 
+        rate_D_gains = (mid[17],mid[18],mid[19]) 
+
         self.pid_K_prev = {
             'pos_P_gains': pos_P_gains,
             'vel_P_gains': vel_P_gains,
@@ -1080,19 +1122,6 @@ class QuadcopterEnv(gym.Env):
             return curriculum_cfg["stage_configs"]
         # 配置列表
         return [
-            # dict(  # L0: rate P/D 优先              # 速度随机阶跃
-            #     control_type = self.ctrlOptions[1],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
-            #     trajectory_type=201,                # 当control_type = 1时，trajectory_type = 0: rate
-            #     yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
-            #     averVel =  0,                       # 0：使用约定时间，1：使用平均速度                  
-            #     reward_preset="rate_L0",            # 调整奖励权重，不同的课程等级重点奖励位置不同
-            #     open_mask_name="mask_rate_L0",      # 调整开放的PID参数，不同的课程等级开放不同的参数
-            #     delta_k_scale = 1.0,                # PID参数增量缩放,用于限制每步动作对PID参数的影响
-            #     rate_limit_scale=0.5,               # 速率限制缩放,用于限制最大速度/最大角速度
-            #     wind_type = 'None',                 # 风类型：0无风，1恒定风，2随机风
-            #     wind_velocity=0.0,                  # 用于调整风速大小
-            #     notes="stabilize rate loop; minimal disturbance",
-            # ),
             dict(  # L0: + att P，小风              # 速度扫频扫幅
                 control_type = self.ctrlOptions[1],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
                 trajectory_type = 202,              # 当control_type = 1时，trajectory_type = 1: attitude
@@ -1106,19 +1135,6 @@ class QuadcopterEnv(gym.Env):
                 wind_velocity=1.0,
                 notes="enable attitude P; light wind",
             ),
-            dict(  # L1: rate P/D 优先              # 速度随机阶跃
-                control_type = self.ctrlOptions[1],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
-                trajectory_type=201,                # 当control_type = 1时，trajectory_type = 0: rate
-                yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
-                averVel =  0,                       # 0：使用约定时间，1：使用平均速度                  
-                reward_preset="rate_L0",            # 调整奖励权重，不同的课程等级重点奖励位置不同
-                open_mask_name="mask_rate_L0",      # 调整开放的PID参数，不同的课程等级开放不同的参数
-                delta_k_scale = 1.0,                # PID参数增量缩放,用于限制每步动作对PID参数的影响
-                rate_limit_scale=0.5,               # 速率限制缩放,用于限制最大速度/最大角速度
-                wind_type = 'None',                 # 风类型：0无风，1恒定风，2随机风
-                wind_velocity=0.0,                  # 用于调整风速大小
-                notes="stabilize rate loop; minimal disturbance",
-            ),
             dict(  # L2: 全开，                     # 小幅随机轨迹
                 control_type = self.ctrlOptions[0], # 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
                 trajectory_type=103,                # trajectory_type = 5: minimum jerk, 
@@ -1131,6 +1147,19 @@ class QuadcopterEnv(gym.Env):
                 wind_type = 'FIXED',
                 wind_velocity=3.0,
                 notes="full 20-dim open; strong wind/gusts",
+            ),
+            dict(  # L1: rate P/D 优先              # 随机速度阶跃
+                control_type = self.ctrlOptions[1],# 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
+                trajectory_type=201,                # 当control_type = 1时，trajectory_type = 0: rate
+                yaw_type = 3,                       # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
+                averVel =  0,                       # 0：使用约定时间，1：使用平均速度                  
+                reward_preset="rate_L0",            # 调整奖励权重，不同的课程等级重点奖励位置不同
+                open_mask_name="mask_rate_L0",      # 调整开放的PID参数，不同的课程等级开放不同的参数
+                delta_k_scale = 1.0,                # PID参数增量缩放,用于限制每步动作对PID参数的影响
+                rate_limit_scale=0.5,               # 速率限制缩放,用于限制最大速度/最大角速度
+                wind_type = 'FIXED',                 # 风类型：0无风，1恒定风，2随机风
+                wind_velocity=0.0,                  # 用于调整风速大小
+                notes="stabilize rate loop; minimal disturbance",
             ),
             dict(  # L3: + vel P/D（可选 I），中风      # 8字航线
                 control_type = self.ctrlOptions[0],     # 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
@@ -1158,6 +1187,19 @@ class QuadcopterEnv(gym.Env):
                 wind_velocity=3.0,
                 notes="enable position loop; circle/figure-8",
             ),
+            # dict(  # L3: + vel P/D（可选 I），中风      # 8字航线
+            #     control_type = self.ctrlOptions[0],     # 0: xyz_pos,  1: xy_vel_z_pos, 2: xyz_vel
+            #     trajectory_type=101,                    # 当control_type = 1时，trajectory_type = 2: velocity
+            #     yaw_type = 3,                           # 0: none  1: yaw_waypoint_timed, 2: yaw_waypoint_interp  3: follow   4: zero
+            #     averVel =  1,                           # 0：使用约定时间，1：使用平均速度                   
+            #     reward_preset="pos_L3",
+            #     open_mask_name="mask_pos_L3",
+            #     delta_k_scale = 1.0,                       
+            #     rate_limit_scale=0.8,
+            #     wind_type = 'FIXED',
+            #     wind_velocity=2.0,
+            #     notes="enable velocity loop; moderate wind",
+            # ),
         ]
 
     def _build_reward_presets(self, curriculum_cfg):

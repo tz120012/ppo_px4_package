@@ -26,19 +26,33 @@ class Control:
     
     def __init__(self, quad, yawType):
         # Set PID Gains and Max Values
-        self.pos_P_gain = np.array([1.0, 1.0, 0.8])
+        # self.pos_P_gain = np.array([1.0, 1.0, 0.8])
 
-        self.vel_P_gain = np.array([3.1, 3.1, 8.5])
-        self.vel_I_gain = np.array([30, 30, 1.6])
-        self.vel_D_gain = np.array([1.05, 1.05, 1.0])
+        # self.vel_P_gain = np.array([3.1, 3.1, 8.5])
+        # self.vel_I_gain = np.array([30, 30, 1.6])
+        # self.vel_D_gain = np.array([1.05, 1.05, 1.0])
+
+        # self.att_P_gain = np.array([6.25, 6.25, 2.75])
+
+        # self.rate_P_gain = np.array([0.255, 0.305, 0.305])
+        # self.rate_I_gain = np.array([5.0, 5.0, 5.0])
+        # self.rate_D_gain = np.array([0.005, 0.005, 0.005])
+
+        self.pos_P_gain = np.array([0.1, 0.1, 0.1])
+
+        self.vel_P_gain = np.array([1.2, 1.2, 2.0])
+        self.vel_I_gain = np.array([0.1, 0.1, 0.2])
+        self.vel_D_gain = np.array([0.1, 0.1, 0.1])
+
+        self.att_P_gain = np.array([0.1, 0.1, 0.1])
+        
+        self.rate_P_gain = np.array([0.01, 0.01, 0.01])
+        self.rate_I_gain = np.array([0.01, 0.01, 0.01])
+        self.rate_D_gain = np.array([0.01, 0.01, 0.01])
 
         # Attitude P gains
         self.PpsiStrong = 8
-        self.att_P_gain = np.array([6.25, 6.25, 2.75])
 
-        self.rate_P_gain = np.array([0.255, 0.305, 0.305])
-        self.rate_I_gain = np.array([5.0, 5.0, 5.0])
-        self.rate_D_gain = np.array([0.005, 0.005, 0.005])
 
         # Max Velocities
         uMax = 15.0

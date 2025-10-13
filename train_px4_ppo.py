@@ -36,7 +36,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--control-type", type=str, default="xyz_pos", choices=["xyz_pos", "xy_vel_z_pos", "xyz_vel"], help="Control mode for the quadcopter")
     parser.add_argument("--trajectory-type", type=int, default=5, help="Trajectory type (0-13)")
     parser.add_argument("--yaw-type", type=int, default=3, help="Yaw control type (0-4)")
-    parser.add_argument("--max-episode-steps", type=int, default=60, help="Maximum steps per episode")      ##
+    parser.add_argument("--max-episode-steps", type=int, default=100, help="Maximum steps per episode")      ##
     parser.add_argument("--rl-dt", type=float, default=0.5, help="RL decision timestep (seconds)")          ##
     parser.add_argument("--sim-dt", type=float, default=0.005, help="Simulation timestep (seconds)")        ##
     parser.add_argument("--wind-type", type=str, default="None", help="Wind disturbance type")                       
