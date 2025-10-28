@@ -49,7 +49,7 @@ class Control:
         self.saturateVel_separetely = False
 
         # Max tilt
-        self.tiltMax = 60.0*deg2rad
+        self.tiltMax = 50.0*deg2rad
 
         # Max Rate
         pMax = 300.0*deg2rad

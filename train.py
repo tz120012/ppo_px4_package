@@ -89,7 +89,7 @@ def get_args() -> argparse.Namespace:
     # ✅ 新增：姿态越界阈值课程学习参数
     parser.add_argument("--attitude-bound-start", type=float, default=90.0,
                        help="Initial attitude bound threshold (degrees)")
-    parser.add_argument("--attitude-bound-end", type=float, default=45.0,
+    parser.add_argument("--attitude-bound-end", type=float, default=60.0,
                        help="Final attitude bound threshold (degrees)")
     parser.add_argument("--attitude-bound-decay-epochs", type=int, default=1000,
                        help="Number of epochs to decay from start to end threshold")
