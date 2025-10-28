@@ -211,6 +211,7 @@ class QuadcopterEnv(gym.Env):
             0.008, 0.008, 0.005         # rate_D_gains: Dp, Dq, Dr
         ],dtype=np.float32)
         self.init_actions = self.normalize_pid_parameters(self.pid_K_prev_vec)
+        self.prev_action = self.init_actions
         self._apply_pid_parameters(self.init_actions)
 
         # 记录PID变化信息
@@ -221,7 +222,6 @@ class QuadcopterEnv(gym.Env):
         self.step_log_rows = []
 
         # 误差变化率相关缓存已移除
-        self.prev_action = np.zeros(20, dtype=np.float32)
         self.prev_rmse_vel_xy = 0.0
         self.prev_rmse_vel_z = 0.0
   
@@ -336,7 +336,7 @@ class QuadcopterEnv(gym.Env):
             self.quad.state[0:3] = self.quad.pos
 
     #  重置历史状态缓存（去除误差变化率缓存）
-        self.prev_action = np.zeros(20, dtype=np.float32)
+        self.prev_action = self.init_actions
         self.prev_rmse_vel_xy = 0.0
         self.prev_rmse_vel_z = 0.0
         
@@ -458,6 +458,102 @@ class QuadcopterEnv(gym.Env):
             "rate_I_gains": rate_I_gains,
             "rate_D_gains": rate_D_gains,
         }
+    
+    def _error_gated_action_adaptation(self, action: np.ndarray) -> np.ndarray:
+        """
+        分层+分通道误差门控机制（12 个独立通道）
+        
+        根据当前各通道误差大小，对 action 进行冻结/限幅/放开处理：
+        - 小误差（< thresh1）：冻结该通道 action
+        - 中误差（thresh1 ~ thresh2）：限幅调整
+        - 大误差（> thresh2）：自由探索
+        
+        Args:
+            action: 原始 action（20维）
+        
+        Returns:
+            处理后的 action（20维）
+        """
+        # ============================================================
+        # 提取当前观测中的误差信号（已归一化）
+        # ============================================================
+        obs_cur = self._get_observation(self.ctrl.sDesCalc)
+        
+        pos_err = obs_cur[24:27]    # [x, y, z]
+        vel_err = obs_cur[27:30]    # [x, y, z]
+        att_err = obs_cur[30:33]    # [roll, pitch, yaw]
+        omega_err = obs_cur[33:36]  # [p, q, r]
+
+        # ============================================================
+        # 阈值配置（建议后续移到 __init__）
+        # ============================================================
+        thresh1 = 0.5      # 小误差冻结阈值
+        thresh2 = 1.0      # 大误差放开阈值
+        limit_delta = 0.2  # 限幅范围
+
+        # ============================================================
+        # 通用门控函数（闭包，可访问外部变量）
+        # ============================================================
+        def _gate_indices(err_val, idxs):
+            """根据误差值对指定 action 索引进行门控"""
+            if err_val < thresh1:
+                # 冻结：保持上一步 action
+                action[idxs] = self.prev_action[idxs]
+            elif thresh1 <= err_val < thresh2:
+                # 限幅：限制变化幅度
+                delta = np.clip(action[idxs] - self.prev_action[idxs], 
+                            -limit_delta, limit_delta)
+                action[idxs] = self.prev_action[idxs] + delta
+            else:
+                # 放开：不干预（保持原 action）
+                pass
+
+        # ============================================================
+        # 1. 位置环（2 通道：xy, z）
+        # ============================================================
+        pos_err_xy = max(abs(pos_err[0]), abs(pos_err[1]))
+        pos_err_z = abs(pos_err[2])
+        
+        _gate_indices(pos_err_xy, [0])  # pos_P_xy
+        _gate_indices(pos_err_z, [1])   # pos_P_z
+
+        # ============================================================
+        # 2. 速度环（2 通道：xy, z）
+        # ============================================================
+        vel_err_xy = max(abs(vel_err[0]), abs(vel_err[1]))
+        vel_err_z = abs(vel_err[2])
+        
+        _gate_indices(vel_err_xy, [2, 4, 6])  # vel_P/I/D_xy
+        _gate_indices(vel_err_z, [3, 5, 7])   # vel_P/I/D_z
+
+        # ============================================================
+        # 3. 姿态环（3 通道：roll, pitch, yaw）
+        # ============================================================
+        att_err_roll = abs(att_err[0])
+        att_err_pitch = abs(att_err[1])
+        att_err_yaw = abs(att_err[2])
+        
+        _gate_indices(att_err_roll, [8])    # att_P_roll
+        _gate_indices(att_err_pitch, [9])   # att_P_pitch
+        _gate_indices(att_err_yaw, [10])    # att_P_yaw
+
+        # ============================================================
+        # 4. 角速度环（3 通道：p, q, r）
+        # ============================================================
+        omega_err_roll = abs(omega_err[0])   # p (roll rate)
+        omega_err_pitch = abs(omega_err[1])  # q (pitch rate)
+        omega_err_yaw = abs(omega_err[2])    # r (yaw rate)
+        
+        _gate_indices(omega_err_roll, [11, 14, 17])    # rate_P/I/D_p
+        _gate_indices(omega_err_pitch, [12, 15, 18])   # rate_P/I/D_q
+        _gate_indices(omega_err_yaw, [13, 16, 19])     # rate_P/I/D_r
+
+        # ============================================================
+        # 返回处理后的 action
+        # ============================================================
+        return action
+
+    
     # =========================
     # step() 函数（主循环）
     # =========================
@@ -466,14 +562,19 @@ class QuadcopterEnv(gym.Env):
         执行一个环境步骤
         """
         # ============================================================
-        # 阶段1: 动作处理
+        # 阶段1: 误差门控动作调整
         # ============================================================
-        # 保存历史动作 
+        action = self._error_gated_action_adaptation(action)
+
+        # 保存历史动作（用于下一步比较）
         self.prev_action = np.asarray(action, dtype=np.float32).ravel().copy()
 
+        # ============================================================
+        # 阶段2: 应用 PID 参数
+        # ============================================================
         self.step_action = self._apply_pid_parameters(action)
         
-        substeps = self.substeps_per_rl
+        substeps_count = self.substeps_per_rl
         
         step_samples: List[Dict[str, float]] = []
 
@@ -490,7 +591,7 @@ class QuadcopterEnv(gym.Env):
         terminated = False
         truncated = False
         
-        for substep_i in range(substeps):
+        for substep_i in range(substeps_count):
             # 2a) 生成期望轨迹
             sDes = self.traj.desiredState(self.time, self.dt, self.quad)
             
@@ -523,12 +624,12 @@ class QuadcopterEnv(gym.Env):
                 terminated = True
 
                 log.warning(
-                    f" step() called: Out of bounds at substep {substep_i+1}/{substeps} "
+                    f" step() called: Out of bounds at substep {substep_i+1}/{substeps_count} "
                     f"(step {self.current_step}, time {self.time:.3f}s, env_id={id(self)})"
                 )
 
                 # 填充缺失子步（保持样本数一致性，避免奖励计算异常）
-                missing_substeps = substeps - len(step_samples)
+                missing_substeps = substeps_count - len(step_samples)
                 if missing_substeps > 0:
                     # 用最后一个有效样本填充（标记为padding）
                     last_sample = step_samples[-1].copy()
