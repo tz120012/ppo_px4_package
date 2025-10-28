@@ -20,7 +20,7 @@ from tianshou.utils.net.continuous import ActorProb, Critic
 from px4Env import QuadcopterEnv  # 请确保路径正确
 
 # ==== 1️⃣ 加载 checkpoint ====
-ckpt_path = "./log_train/1001/251028-012008/best_policy.pth"
+ckpt_path = "./log_train/1001/251028-184524/best_policy.pth"
 ckpt = torch.load(ckpt_path, map_location="cpu")
 args = ckpt["args"]
 model_state = ckpt["model"]

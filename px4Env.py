@@ -390,7 +390,7 @@ class QuadcopterEnv(gym.Env):
         
         # 改进：更明确的初始化检查（应该在 __init__ 中完成）
         if not hasattr(self, 'pid_K_prev_vec') or self.pid_K_prev_vec is None:
-            log.warning("⚠️ pid_K_prev_vec not initialized in __init__! Using mid-range fallback...")
+            log.warning(" pid_K_prev_vec not initialized in __init__! Using mid-range fallback...")
             self.pid_K_prev_vec = (K_min + K_max) / 2.0
         
         K_prev_vec = self.pid_K_prev_vec
@@ -487,8 +487,8 @@ class QuadcopterEnv(gym.Env):
         # ============================================================
         # 阈值配置（建议后续移到 __init__）
         # ============================================================
-        thresh1 = 0.5      # 小误差冻结阈值
-        thresh2 = 1.0      # 大误差放开阈值
+        thresh1 = 0.05      # 小误差冻结阈值
+        thresh2 = 0.2      # 大误差放开阈值
         limit_delta = 0.2  # 限幅范围
 
         # ============================================================
@@ -509,16 +509,23 @@ class QuadcopterEnv(gym.Env):
                 pass
 
         # ============================================================
-        # 1. 位置环（2 通道：xy, z）
+        # 1. 位置环（2 通道：xy, z）["xyz_pos", "xy_vel_z_pos", "xyz_vel"] 
         # ============================================================
-        pos_err_xy = max(abs(pos_err[0]), abs(pos_err[1]))
-        pos_err_z = abs(pos_err[2])
+        if self.control_type == "xyz_vel":
+            pos_err_xy = 0
+            pos_err_z = 0
+        elif self.control_type == "xyz_pos":
+            pos_err_xy = max(abs(pos_err[0]), abs(pos_err[1]))
+            pos_err_z = abs(pos_err[2])
+        elif self.control_type == "xy_vel_z_pos":
+            pos_err_xy = 0
+            pos_err_z = abs(pos_err[2])
         
         _gate_indices(pos_err_xy, [0])  # pos_P_xy
         _gate_indices(pos_err_z, [1])   # pos_P_z
 
         # ============================================================
-        # 2. 速度环（2 通道：xy, z）
+        # 2. 速度环（2 通道：xy, z）   
         # ============================================================
         vel_err_xy = max(abs(vel_err[0]), abs(vel_err[1]))
         vel_err_z = abs(vel_err[2])
