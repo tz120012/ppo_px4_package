@@ -20,7 +20,7 @@ from tianshou.utils.net.continuous import ActorProb, Critic
 from px4Env import QuadcopterEnv  # 请确保路径正确
 
 # ==== 1️⃣ 加载 checkpoint ====
-ckpt_path = "./log_train/1001/251028-184524/best_policy.pth"
+ckpt_path = "./log_train/1001/251029-000309/best_policy.pth"
 ckpt = torch.load(ckpt_path, map_location="cpu")
 args = ckpt["args"]
 model_state = ckpt["model"]
@@ -39,6 +39,7 @@ env = QuadcopterEnv(
     attitude_bound_start=args.get("attitude_bound_start", 50),
     attitude_bound_end=args.get("attitude_bound_end", 50),
     attitude_bound_decay_epochs=args.get("attitude_bound_decay_epochs", 1),
+    eval_mode=True,
 )
 obs, info = env.reset(seed=args.get("seed", 1001))
 

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import csv
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -70,7 +71,7 @@ class QuadcopterEnv(gym.Env):
         self.ctrlOptions = ["xyz_pos", "xy_vel_z_pos", "xyz_vel"]
 
         # ==================== 动作空间模式（直接式 vs 增量式） ====================
-        self.enable_smooth_transition = False   # train时不用Smooth，测试时用Smooth过渡
+        self.enable_smooth_transition = True   # train时不用Smooth，测试时用Smooth过渡
         self.alpha = 0.8                        # EMA平滑系数（仅用于平滑过渡，不影响最终收敛）
         
         # 奖励缩放因子
@@ -187,10 +188,13 @@ class QuadcopterEnv(gym.Env):
         
         self.pid_safe_max = np.array([
             2.0, 1.5,           # pos_P_gains
+
             15.0, 15.0,          # vel_P_gains
             60.0, 3.0,          # vel_I_gains
             2.0, 2.0,           # vel_D_gains
+
             12.0, 12.0, 5.0,    # att_P_gains
+
             0.5, 0.6, 0.6,      # rate_P_gains
             10.0, 10.0, 10.0,   # rate_I_gains
             0.01, 0.01, 0.01    # rate_D_gains
@@ -206,8 +210,8 @@ class QuadcopterEnv(gym.Env):
             10.0, 1.6,                  # vel_I_gains: Ixydot, Izdot
             1.5, 1.0,                  # vel_D_gains: Dxydot, Dzdot
             8.0, 8.0, 2.75,             # att_P_gains: Pphi, Ptheta, Ppsi
-            0.6, 0.305, 0.305,        # rate_P_gains: Pp, Pq, Pr
-            5.0, 5.0, 5.0,              # rate_I_gains: Ip, Iq, Ir
+            0.5, 0.5, 0.305,            # rate_P_gains: Pp, Pq, Pr
+            3.0, 3.0, 5.0,              # rate_I_gains: Ip, Iq, Ir
             0.008, 0.008, 0.005         # rate_D_gains: Dp, Dq, Dr
         ],dtype=np.float32)
         self.init_actions = self.normalize_pid_parameters(self.pid_K_prev_vec)
@@ -424,7 +428,7 @@ class QuadcopterEnv(gym.Env):
         return gains_from_action
 
     # =========================
-    # 辅助函数：PID参数向量解包
+    # 辅助函数
     # =========================
     def _unpack_vec_to_groups(self, K_vec: np.ndarray) -> dict:
         """将20维向量解包为8组增益"""
@@ -487,8 +491,8 @@ class QuadcopterEnv(gym.Env):
         # ============================================================
         # 阈值配置（建议后续移到 __init__）
         # ============================================================
-        thresh1 = 0.05      # 小误差冻结阈值
-        thresh2 = 0.2      # 大误差放开阈值
+        thresh1 = 0.03      # 小误差冻结阈值
+        thresh2 = 0.3      # 大误差放开阈值
         limit_delta = 0.2  # 限幅范围
 
         # ============================================================
@@ -560,7 +564,37 @@ class QuadcopterEnv(gym.Env):
         # ============================================================
         return action
 
-    
+    def _log_reward_to_csv(self, reward_dict):
+        """将奖励详情记录到CSV文件"""
+        # 定义日志文件路径
+        log_dir = "logs/reward_debug"
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # 使用时间戳区分不同训练会话
+        if not hasattr(self, 'csv_log_file'):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.csv_log_file = os.path.join(log_dir, f"reward_log_{timestamp}.csv")
+            self.csv_initialized = False
+        
+        # 准备数据行
+        row_data = {
+            'step': getattr(self, 'step_count', 0),
+            'episode': getattr(self, 'episode_count', 0),
+            **reward_dict  # 展开所有奖励组件
+        }
+        
+        # 写入CSV
+        file_exists = os.path.isfile(self.csv_log_file)
+        with open(self.csv_log_file, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=row_data.keys())
+            
+            # 首次写入添加表头
+            if not file_exists or not self.csv_initialized:
+                writer.writeheader()
+                self.csv_initialized = True
+            
+            writer.writerow(row_data)
+
     # =========================
     # step() 函数（主循环）
     # =========================
@@ -680,7 +714,7 @@ class QuadcopterEnv(gym.Env):
         
         # 正常情况：计算完整奖励
         # 3.1 基础奖励（基于RMSE误差）
-        segment_reward, metrics = self._compute_segment_reward_step(step_samples)
+        segment_reward, reward_for_debug, metrics = self._compute_segment_reward_step(step_samples)
                     
         # 3.3 速度跟踪成功奖励（正向激励）
         vel_tracking_bonus = 0.0
@@ -707,10 +741,37 @@ class QuadcopterEnv(gym.Env):
             # 更新历史
             self.prev_rmse_vel_xy = rmse_vel_xy
             self.prev_rmse_vel_z = rmse_vel_z
-        
+
+        # 记录调试信息
+        reward_for_debug['segment_reward'] = segment_reward
+        reward_for_debug['vel_tracking_bonus'] = vel_tracking_bonus  
+
         # 3.4 合成总奖励（缩放前）
         reward_before_scale = segment_reward + vel_tracking_bonus
+        reward_for_debug['reward_total_before_scale'] = reward_before_scale
 
+        # 调试日志输出                       
+        # log.warning(f"reward_pos_xy={reward_for_debug['reward_pos_xy']}\n")
+        # log.warning(f"reward_pos_z={reward_for_debug['reward_pos_z']}\n")
+        # log.warning(f"reward_vel_xy={reward_for_debug['reward_vel_xy']}\n")
+        # log.warning(f"reward_vel_z={reward_for_debug['reward_vel_z']}\n")
+        # log.warning(f"reward_att={reward_for_debug['reward_att']}\n")
+        # log.warning(f"reward_omega={reward_for_debug['reward_omega']}\n")
+        # log.warning(f"reward_u={reward_for_debug['reward_u']}\n")
+        # log.warning(f"reward_dv={reward_for_debug['reward_dv']}\n")
+        # log.warning(f"reward_domega={reward_for_debug['reward_domega']}\n")
+        # log.warning(f"reward_du={reward_for_debug['reward_du']}\n")
+        # log.warning(f"reward_sat={reward_for_debug['reward_sat']}\n")
+        # log.warning(f"reward_over={reward_for_debug['reward_over']}\n")
+        # log.warning(f"reward_oscillation_penalty={reward_for_debug['reward_oscillation_penalty']}\n")
+        # log.warning(f"reward_vel_bonus={reward_for_debug['reward_vel_bonus']}\n")
+        # log.warning(f"segment_reward={segment_reward}\n")
+        # log.warning(f"vel_tracking_bonus={vel_tracking_bonus}\n")
+        # log.warning(f"reward_before_scale={reward_before_scale}\n")
+
+        # 记录到CSV文件
+        if self.eval_mode:
+            self._log_reward_to_csv(reward_for_debug)
         # ============================================================
         # 阶段4: 终止条件判断
         # ============================================================
@@ -1068,28 +1129,51 @@ class QuadcopterEnv(gym.Env):
         #  奖励函数（优化后的权重）
         sw = self.segment_weights
 
-        segment_reward = -(
-            # 跟踪误差项（速度主导）
-            sw["W_pos_xy"] * rmse_pos_xy +
-            sw["W_pos_z"] * rmse_pos_z +
-            sw["W_vel_xy"] * rmse_vel_xy +      #  3.0（核心）
-            sw["W_vel_z"] * rmse_vel_z +        #  2.0（核心）
-            sw["W_att"] * rmse_att +            #  0.8（提升）
-            sw["W_omega"] * rms_omega +
-            
-            # 控制平滑项
-            sw["W_u"] * mean_control_effort +
-            sw["W_dv"] * rms_dv +               #  0.1（加强）
-            sw["W_domega"] * rms_domega +
-            sw["W_du"] * rms_du +               #  0.5（关键）
-            
-            # 约束惩罚
-            sw["W_sat"] * saturation_hits_norm +
-            sw["W_over"] * overshoot_hits_norm +
-            
-            # 震荡惩罚
-            oscillation_penalty
-        ) + vel_bonus  #  加上分档奖励
+        reward_pos_xy = sw["W_pos_xy"] * rmse_pos_xy
+        reward_pos_z = sw["W_pos_z"] * rmse_pos_z
+        reward_vel_xy = sw["W_vel_xy"] * rmse_vel_xy
+        reward_vel_z = sw["W_vel_z"] * rmse_vel_z
+        reward_att = sw["W_att"] * rmse_att              
+        reward_omega = sw["W_omega"] * rms_omega
+        reward_u = sw["W_u"] * mean_control_effort
+        reward_dv = sw["W_dv"] * rms_dv
+        reward_domega = sw["W_domega"] * rms_domega
+        reward_du = sw["W_du"] * rms_du
+        reward_sat = sw["W_sat"] * saturation_hits_norm
+        reward_over = sw["W_over"] * overshoot_hits_norm
+        reward_oscillation_penalty = oscillation_penalty
+        reward_vel_bonus = vel_bonus
+
+        segment_reward = - (reward_pos_xy +
+                            reward_pos_z +
+                            reward_vel_xy +
+                            reward_vel_z +
+                            reward_att +
+                            reward_omega +
+                            reward_u +
+                            reward_dv +
+                            reward_domega +
+                            reward_du +
+                            reward_sat +
+                            reward_over +
+                            reward_oscillation_penalty) + reward_vel_bonus
+
+        reward_for_debug = {
+            "reward_pos_xy": reward_pos_xy,
+            "reward_pos_z": reward_pos_z,
+            "reward_vel_xy": reward_vel_xy,
+            "reward_vel_z": reward_vel_z,
+            "reward_att": reward_att,
+            "reward_omega": reward_omega,
+            "reward_u": reward_u,
+            "reward_dv": reward_dv,
+            "reward_domega": reward_domega,
+            "reward_du": reward_du,
+            "reward_sat": reward_sat,
+            "reward_over": reward_over,
+            "reward_oscillation_penalty": reward_oscillation_penalty,
+            "reward_vel_bonus": reward_vel_bonus,
+        }
 
         metrics = {
             'segment_duration': float(len(valid_samples) * self.dt),
@@ -1115,7 +1199,7 @@ class QuadcopterEnv(gym.Env):
             'oscillation_penalty': float(oscillation_penalty),
         }
 
-        return float(segment_reward), metrics
+        return float(segment_reward), reward_for_debug, metrics
 
     # =========================
     #  观测函数
@@ -1142,6 +1226,7 @@ class QuadcopterEnv(gym.Env):
         eul_err = eul_ref - eul_fb
         eul_err = np.arctan2(np.sin(eul_err), np.cos(eul_err))  # 将欧拉角误差包裹到 [-pi, pi]
         omega_err = omega_ref - omega_fb
+        log.warning(f"Obs Extraction: pos_err={pos_err}, vel_err={vel_err}, eul_err={eul_err}, omega_err={omega_err}")
         
         # 误差归一化
         pos_err_norm = np.clip(pos_err / 10.0, -1, 1)      # 位置误差 /10m

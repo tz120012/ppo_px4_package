@@ -27,13 +27,16 @@ class Control:
     def __init__(self, quad, yawType):
         # Set PID Gains and Max Values
         self.pos_P_gain = np.array([1.0, 1.0, 0.8])
-        self.vel_P_gain = np.array([3.1, 3.1, 8.5])
-        self.vel_I_gain = np.array([30, 30, 1.6])
-        self.vel_D_gain = np.array([1.05, 1.05, 1.0])
+
+        self.vel_P_gain = np.array([12.0, 12.0, 8.5])
+        self.vel_I_gain = np.array([10.0, 10.0, 1.6])
+        self.vel_D_gain = np.array([1.5, 1.5, 1.0])
+
         self.att_P_gain = np.array([8, 8, 2.75])
-        self.rate_P_gain = np.array([0.255, 0.305, 0.305])
-        self.rate_I_gain = np.array([5.0, 5.0, 5.0])
-        self.rate_D_gain = np.array([0.005, 0.005, 0.005])
+
+        self.rate_P_gain = np.array([0.5, 0.5, 0.305])
+        self.rate_I_gain = np.array([3.0, 3.0, 5.0])
+        self.rate_D_gain = np.array([0.008, 0.008, 0.005])
 
         # Attitude P gains
         self.PpsiStrong = 8
