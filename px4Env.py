@@ -601,12 +601,13 @@ class QuadcopterEnv(gym.Env):
         bonus: 1.0 → 10.0
         """
         k = -2.0 * np.log(9.0)  # ≈ -4.394
-        
         bonus_xy = 10.0 - 9.0 * np.exp(k * rmse_vel_xy)
         bonus_z = 10.0 - 9.0 * np.exp(k * rmse_vel_z)
-        
         bonus_xy = np.clip(bonus_xy, 1.0, 10.0)
         bonus_z = np.clip(bonus_z, 1.0, 10.0)
+
+        # bonus_xy = np.clip(-20.0 * rmse_vel_xy + 10.0, 1.0, 10.0)
+        # bonus_z = np.clip(-20.0 * rmse_vel_z + 10.0, 1.0, 10.0)
         
         bonus_total = (bonus_xy + bonus_z) / 2.0
         
