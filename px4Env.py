@@ -72,7 +72,7 @@ class QuadcopterEnv(gym.Env):
 
         # ==================== 动作空间模式（直接式 vs 增量式） ====================
         self.enable_smooth_transition = True   # train时不用Smooth，测试时用Smooth过渡
-        self.alpha = 0.8                        # EMA平滑系数（仅用于平滑过渡，不影响最终收敛）
+        self.alpha = 0.1                       # EMA平滑系数（0:无平滑，1:强平滑）
         
         # 奖励缩放因子
         self.reward_scale = 0.01 #将奖励从[-10000,0]缩放到[-100,0]
@@ -130,8 +130,8 @@ class QuadcopterEnv(gym.Env):
             W_pid_change=0.0,   #1.0,   
         )
         #  速度跟踪成功阈值
-        self.vel_tracking_excellent_threshold = 0.2   # m/s（精确跟踪）
-        self.vel_tracking_good_threshold = 0.5        # m/s（良好跟踪）
+        self.vel_tracking_excellent_threshold = 0.1   # m/s（精确跟踪）
+        self.vel_tracking_good_threshold = 0.3        # m/s（良好跟踪）
         self.vel_tracking_poor_threshold = 1.0        # m/s（较差跟踪）
 
         #  分档奖励系数
@@ -206,9 +206,9 @@ class QuadcopterEnv(gym.Env):
         # ==================== 基线PID参数（初始化为中值，并应用到ctrl） ====================
         self.pid_K_prev_vec = np.array([
             1.0, 0.8,                   # pos_P_gains: Pxy, Pz
-            12, 8.5,                   # vel_P_gains: Pxydot, Pzdot
+            7, 8.5,                   # vel_P_gains: Pxydot, Pzdot
             10.0, 1.6,                  # vel_I_gains: Ixydot, Izdot
-            1.5, 1.0,                  # vel_D_gains: Dxydot, Dzdot
+            0.3, 1.0,                  # vel_D_gains: Dxydot, Dzdot
             8.0, 8.0, 2.75,             # att_P_gains: Pphi, Ptheta, Ppsi
             0.5, 0.5, 0.305,            # rate_P_gains: Pp, Pq, Pr
             3.0, 3.0, 5.0,              # rate_I_gains: Ip, Iq, Ir
@@ -404,9 +404,9 @@ class QuadcopterEnv(gym.Env):
         
         # 可选：平滑过渡（EMA 低通滤波）
         if self.enable_smooth_transition:
-            # alpha ∈ (0, 1]: alpha=1 无平滑，alpha→0 强平滑
+            # alpha ∈ (0, 1]: alpha=0 无平滑，alpha→1 强平滑
             alpha = float(np.clip(self.alpha, 1e-6, 1.0))
-            K_new_vec = (1.0 - alpha) * K_prev_vec + alpha * K_target
+            K_new_vec = alpha * K_prev_vec + (1.0 - alpha) * K_target
         else:
             K_new_vec = K_target
         
@@ -493,7 +493,7 @@ class QuadcopterEnv(gym.Env):
         # ============================================================
         thresh1 = 0.03      # 小误差冻结阈值
         thresh2 = 0.3      # 大误差放开阈值
-        limit_delta = 0.2  # 限幅范围
+        limit_delta = 0.5  # 限幅范围
 
         # ============================================================
         # 通用门控函数（闭包，可访问外部变量）

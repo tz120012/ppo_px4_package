@@ -28,9 +28,9 @@ class Control:
         # Set PID Gains and Max Values
         self.pos_P_gain = np.array([1.0, 1.0, 0.8])
 
-        self.vel_P_gain = np.array([12.0, 12.0, 8.5])
-        self.vel_I_gain = np.array([10.0, 10.0, 1.6])
-        self.vel_D_gain = np.array([1.5, 1.5, 1.0])
+        self.vel_P_gain = np.array([7, 7, 8.5])
+        self.vel_I_gain = np.array([10, 10, 1.6])
+        self.vel_D_gain = np.array([0.3, 0.3, 1.0])
 
         self.att_P_gain = np.array([8, 8, 2.75])
 
