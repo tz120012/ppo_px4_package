@@ -67,6 +67,7 @@ class QuadcopterEnv(gym.Env):
         self.target_pos = target_pos if target_pos is not None else np.array([2.0, 2.0, 1.0])
         self.wind_type = wind_type
         self.wind_strength = wind_strength
+        self.terminated_count = 0           # 用于记录在整个训练过程中因超过边界而中断的次数
         
         self.ctrlOptions = ["xyz_pos", "xy_vel_z_pos", "xyz_vel"]
 
@@ -75,8 +76,8 @@ class QuadcopterEnv(gym.Env):
         self.alpha = 0.1                       # EMA平滑系数（0:无平滑，1:强平滑）
         
         # 奖励缩放因子
-        self.reward_scale = 0.01 #将奖励从[-10000,0]缩放到[-100,0]
-        self.failure_penalty = -100000.0   
+        self.reward_scale = 0.1    #奖励缩放因子
+        self.failure_penalty = -5000.0   
 
         #  子步改进相关参数
         self.enable_oscillation_penalty = True  # 是否启用震荡惩罚
@@ -129,15 +130,12 @@ class QuadcopterEnv(gym.Env):
             #  PID参数变化惩罚
             W_pid_change=0.0,   #1.0,   
         )
-        #  速度跟踪成功阈值
-        self.vel_tracking_excellent_threshold = 0.1   # m/s（精确跟踪）
-        self.vel_tracking_good_threshold = 0.3        # m/s（良好跟踪）
-        self.vel_tracking_poor_threshold = 1.0        # m/s（较差跟踪）
-
-        #  分档奖励系数
-        self.vel_reward_excellent_bonus = 50.0   # 精确跟踪的正奖励
-        self.vel_reward_poor_penalty = 100.0     # 极差跟踪的额外惩罚
-
+        # #  速度跟踪成功阈值
+        # self.vel_tracking_excellent_threshold = 0.1   # m/s（精确跟踪）
+        # self.vel_tracking_good_threshold = 0.3        # m/s（良好跟踪）
+        # self.vel_tracking_poor_threshold = 1.0        # m/s（较差跟踪）
+        # self.vel_reward_excellent_bonus = 0   # 精确跟踪的正奖励
+        # self.vel_reward_poor_penalty = 2     # 极差跟踪的额外惩罚
 
         # ==================== 限制与判据 ====================
         self.limits = dict(
@@ -492,8 +490,8 @@ class QuadcopterEnv(gym.Env):
         # 阈值配置（建议后续移到 __init__）
         # ============================================================
         thresh1 = 0.03      # 小误差冻结阈值
-        thresh2 = 0.3      # 大误差放开阈值
-        limit_delta = 0.5  # 限幅范围
+        thresh2 = 0.3       # 大误差放开阈值
+        limit_delta = 0.5   # 限幅范围
 
         # ============================================================
         # 通用门控函数（闭包，可访问外部变量）
@@ -595,6 +593,24 @@ class QuadcopterEnv(gym.Env):
             
             writer.writerow(row_data)
 
+    def _calculate_vel_tracking_bonus_exp(self, rmse_vel_xy, rmse_vel_z):
+        """
+        速度跟踪奖励（指数曲线）
+        rmse越接近0，penalty增长越快
+        rmse: 0.5 → 0.0
+        bonus: 1.0 → 10.0
+        """
+        k = -2.0 * np.log(9.0)  # ≈ -4.394
+        
+        bonus_xy = 10.0 - 9.0 * np.exp(k * rmse_vel_xy)
+        bonus_z = 10.0 - 9.0 * np.exp(k * rmse_vel_z)
+        
+        bonus_xy = np.clip(bonus_xy, 1.0, 10.0)
+        bonus_z = np.clip(bonus_z, 1.0, 10.0)
+        
+        bonus_total = (bonus_xy + bonus_z) / 2.0
+        
+        return bonus_total
     # =========================
     # step() 函数（主循环）
     # =========================
@@ -692,6 +708,7 @@ class QuadcopterEnv(gym.Env):
 
             # 施加失败惩罚
             reward_before_scale = self.failure_penalty
+            self.terminated_count += 1
             reward = reward_before_scale * self.reward_scale
             self.episode_reward += reward
             
@@ -711,8 +728,6 @@ class QuadcopterEnv(gym.Env):
         # ============================================================
         # 阶段3: 奖励计算
         # ============================================================
-        
-        # 正常情况：计算完整奖励
         # 3.1 基础奖励（基于RMSE误差）
         segment_reward, reward_for_debug, metrics = self._compute_segment_reward_step(step_samples)
                     
@@ -721,14 +736,9 @@ class QuadcopterEnv(gym.Env):
         if metrics:
             rmse_vel_xy = metrics.get("rmse_vel_xy", 999.0)
             rmse_vel_z = metrics.get("rmse_vel_z", 999.0)
-            
-            # 阈值奖励
-            if rmse_vel_xy < 0.5 and rmse_vel_z < 0.5:
-                vel_tracking_bonus += 2.0
-                if rmse_vel_xy < 0.2 and rmse_vel_z < 0.2:
-                    vel_tracking_bonus += 5.0
-            
-            #  修复：改进奖励（误差下降），添加上限约束防止震荡
+        
+            vel_tracking_bonus = self._calculate_vel_tracking_bonus_exp(rmse_vel_xy, rmse_vel_z)
+            #  改进奖励（误差下降），添加上限约束防止震荡
             vel_improvement_xy = self.prev_rmse_vel_xy - rmse_vel_xy
             vel_improvement_z = self.prev_rmse_vel_z - rmse_vel_z
             
@@ -749,25 +759,6 @@ class QuadcopterEnv(gym.Env):
         # 3.4 合成总奖励（缩放前）
         reward_before_scale = segment_reward + vel_tracking_bonus
         reward_for_debug['reward_total_before_scale'] = reward_before_scale
-
-        # 调试日志输出                       
-        # log.warning(f"reward_pos_xy={reward_for_debug['reward_pos_xy']}\n")
-        # log.warning(f"reward_pos_z={reward_for_debug['reward_pos_z']}\n")
-        # log.warning(f"reward_vel_xy={reward_for_debug['reward_vel_xy']}\n")
-        # log.warning(f"reward_vel_z={reward_for_debug['reward_vel_z']}\n")
-        # log.warning(f"reward_att={reward_for_debug['reward_att']}\n")
-        # log.warning(f"reward_omega={reward_for_debug['reward_omega']}\n")
-        # log.warning(f"reward_u={reward_for_debug['reward_u']}\n")
-        # log.warning(f"reward_dv={reward_for_debug['reward_dv']}\n")
-        # log.warning(f"reward_domega={reward_for_debug['reward_domega']}\n")
-        # log.warning(f"reward_du={reward_for_debug['reward_du']}\n")
-        # log.warning(f"reward_sat={reward_for_debug['reward_sat']}\n")
-        # log.warning(f"reward_over={reward_for_debug['reward_over']}\n")
-        # log.warning(f"reward_oscillation_penalty={reward_for_debug['reward_oscillation_penalty']}\n")
-        # log.warning(f"reward_vel_bonus={reward_for_debug['reward_vel_bonus']}\n")
-        # log.warning(f"segment_reward={segment_reward}\n")
-        # log.warning(f"vel_tracking_bonus={vel_tracking_bonus}\n")
-        # log.warning(f"reward_before_scale={reward_before_scale}\n")
 
         # 记录到CSV文件
         if self.eval_mode:
@@ -1043,11 +1034,6 @@ class QuadcopterEnv(gym.Env):
                 overshoot_results['ang_vel'][i] = 1
                 overthrow_detected = True  # 检测到超调
 
-        # # 仅在发生超调时记录
-        # if overthrow_detected:
-        #     # 这里可以添加记录超调的逻辑，具体实现可以根据需要进行修改
-        #     log.warning("超调发生！")  # 示例操作，您可以替换为日志记录或其他动作
-
         # 返回结果可以选择仅返回是否发生超调或详细结果
         return 1 if overthrow_detected else 0
 
@@ -1064,7 +1050,6 @@ class QuadcopterEnv(gym.Env):
                 "u2", "dv2", "domega2", "du2",
                 "sat_hit", "over_hit"]
         S = {k: np.array([e[k] for e in valid_samples], dtype=float) for k in keys}
-
 
         # 标准RMSE
         rmse_pos_xy = float(np.sqrt(np.mean(S["pos_xy2"])))
@@ -1113,19 +1098,6 @@ class QuadcopterEnv(gym.Env):
             if oscillation_ratio > 0.5 and oscillation_amplitude > 0.3:
                 oscillation_penalty = 0.3 * oscillation_ratio + 0.2 * min(oscillation_amplitude, 2.0)
 
-        #  改进：速度跟踪分档奖励
-        vel_error_total = rmse_vel_xy + rmse_vel_z  # 总误差
-        
-        if vel_error_total < self.vel_tracking_excellent_threshold:  # <1m/s
-            # 精确跟踪：大额正奖励
-            vel_bonus = self.vel_reward_excellent_bonus * (1.0 - vel_error_total / self.vel_tracking_excellent_threshold)
-        elif vel_error_total > self.vel_tracking_poor_threshold:    # >3m/s
-            # 极差跟踪：额外惩罚
-            vel_bonus = -self.vel_reward_poor_penalty * (vel_error_total / self.vel_tracking_poor_threshold - 1.0)
-        else:
-            # 中间状态：无额外奖励
-            vel_bonus = 0.0
-
         #  奖励函数（优化后的权重）
         sw = self.segment_weights
 
@@ -1142,7 +1114,7 @@ class QuadcopterEnv(gym.Env):
         reward_sat = sw["W_sat"] * saturation_hits_norm
         reward_over = sw["W_over"] * overshoot_hits_norm
         reward_oscillation_penalty = oscillation_penalty
-        reward_vel_bonus = vel_bonus
+        # reward_vel_bonus = vel_bonus
 
         segment_reward = - (reward_pos_xy +
                             reward_pos_z +
@@ -1156,7 +1128,8 @@ class QuadcopterEnv(gym.Env):
                             reward_du +
                             reward_sat +
                             reward_over +
-                            reward_oscillation_penalty) + reward_vel_bonus
+                            reward_oscillation_penalty)
+                            # reward_oscillation_penalty) + reward_vel_bonus
 
         reward_for_debug = {
             "reward_pos_xy": reward_pos_xy,
@@ -1172,7 +1145,7 @@ class QuadcopterEnv(gym.Env):
             "reward_sat": reward_sat,
             "reward_over": reward_over,
             "reward_oscillation_penalty": reward_oscillation_penalty,
-            "reward_vel_bonus": reward_vel_bonus,
+            # "reward_vel_bonus": reward_vel_bonus,
         }
 
         metrics = {
@@ -1226,7 +1199,7 @@ class QuadcopterEnv(gym.Env):
         eul_err = eul_ref - eul_fb
         eul_err = np.arctan2(np.sin(eul_err), np.cos(eul_err))  # 将欧拉角误差包裹到 [-pi, pi]
         omega_err = omega_ref - omega_fb
-        log.warning(f"Obs Extraction: pos_err={pos_err}, vel_err={vel_err}, eul_err={eul_err}, omega_err={omega_err}")
+        # log.warning(f"Obs Extraction: pos_err={pos_err}, vel_err={vel_err}, eul_err={eul_err}, omega_err={omega_err}")
         
         # 误差归一化
         pos_err_norm = np.clip(pos_err / 10.0, -1, 1)      # 位置误差 /10m
@@ -1479,7 +1452,6 @@ class QuadcopterEnv(gym.Env):
                 if i >= 15:
                     ax.set_xlabel("t (s)")
                 # 更紧凑布局，隐藏 y 标签刻度密度
-                # ax.set_ylabel("K")
             plt.tight_layout()
             self._gains_initialized = True
 

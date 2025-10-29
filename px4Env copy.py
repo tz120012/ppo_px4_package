@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import csv
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -27,7 +28,7 @@ def _quaternion_to_euler(quat):
     phi = np.arctan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
     theta = np.arcsin(2.0 * (w * y - z * x))
     psi = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
-    return np.array([phi, theta, psi])
+    return np.array([psi, theta, phi])
 
 class QuadcopterEnv(gym.Env):
     """
@@ -45,7 +46,7 @@ class QuadcopterEnv(gym.Env):
                  target_pos: Optional[np.ndarray] = None,
                  wind_type: str = 'None',
                  wind_strength: float = 0.0,
-                 #  新增：姿态越界阈值课程学习参数
+                 #  姿态越界阈值课程学习参数
                  attitude_bound_start: float = 90.0,  # 初始阈值（度）
                  attitude_bound_end: float = 60.0,    # 最终阈值（度）
                  attitude_bound_decay_epochs: int = 1000,  # 衰减周期（epoch数）
@@ -66,20 +67,19 @@ class QuadcopterEnv(gym.Env):
         self.target_pos = target_pos if target_pos is not None else np.array([2.0, 2.0, 1.0])
         self.wind_type = wind_type
         self.wind_strength = wind_strength
+        self.terminated_count = 0           # 用于记录在整个训练过程中因超过边界而中断的次数
         
         self.ctrlOptions = ["xyz_pos", "xy_vel_z_pos", "xyz_vel"]
 
         # ==================== 动作空间模式（直接式 vs 增量式） ====================
-        self.enable_smooth_transition = False   # train时不用Smooth，测试时用Smooth过渡
-        self.alpha = 0.8                        # EMA平滑系数（仅用于平滑过渡，不影响最终收敛）
+        self.enable_smooth_transition = True   # train时不用Smooth，测试时用Smooth过渡
+        self.alpha = 0.1                       # EMA平滑系数（0:无平滑，1:强平滑）
         
-        # 速率限制缩放因子（保留，用于其他用途）
-        self.rate_limit_scale = 0.85  
-        
-        # 新增：奖励缩放因子
-        self.reward_scale = 0.01 #将奖励从[-10000,0]缩放到[-100,0]
-        self.failure_penalty = -100000.0        
-        #  新增：子步改进相关参数
+        # 奖励缩放因子
+        self.reward_scale = 0.1    #奖励缩放因子
+        self.failure_penalty = -5000.0   
+
+        #  子步改进相关参数
         self.enable_oscillation_penalty = True  # 是否启用震荡惩罚
         self.compat_truncated_as_done = bool(compat_truncated_as_done)   # 兼容旧训练循环：将截断同时视为 done（terminated）以触发reset
         
@@ -120,25 +120,22 @@ class QuadcopterEnv(gym.Env):
             W_omega=1.0,                    # 角速度误差（保持）
             
             # 惩罚项
-            W_u=0.0,        #0.0        # 控制能量
-            W_dv=0.0,        #0.05,              #  速度变化率
-            W_domega=0.0,    #0.02,          # 角速度变化率
-            W_du=0.0,        #1.0,               #  电机指令平滑
-            W_sat=0.0,       #0.5,          # 饱和惩罚
-            W_over=0.0,      #0.2,         # 超调惩罚
-            
+            W_u=0.0,        #0.0                    # 控制能量
+            W_dv=0.0,        #0.05,                 # 速度变化率
+            W_domega=0.0,    #0.02,                 # 角速度变化率
+            W_du=0.0,        #1.0,                  # 电机指令平滑
+            W_sat=0.0,       #0.5,                  # 饱和惩罚
+            W_over=0.0,      #0.2,                  # 超调惩罚
+
             #  PID参数变化惩罚
             W_pid_change=0.0,   #1.0,   
         )
-        #  新增：速度跟踪成功阈值
-        self.vel_tracking_excellent_threshold = 0.2   # m/s（精确跟踪）
-        self.vel_tracking_good_threshold = 0.5        # m/s（良好跟踪）
-        self.vel_tracking_poor_threshold = 1.0        # m/s（较差跟踪）
-
-        #  新增：分档奖励系数
-        self.vel_reward_excellent_bonus = 50.0   # 精确跟踪的正奖励
-        self.vel_reward_poor_penalty = 100.0     # 极差跟踪的额外惩罚
-
+        # #  速度跟踪成功阈值
+        # self.vel_tracking_excellent_threshold = 0.1   # m/s（精确跟踪）
+        # self.vel_tracking_good_threshold = 0.3        # m/s（良好跟踪）
+        # self.vel_tracking_poor_threshold = 1.0        # m/s（较差跟踪）
+        # self.vel_reward_excellent_bonus = 0   # 精确跟踪的正奖励
+        # self.vel_reward_poor_penalty = 2     # 极差跟踪的额外惩罚
 
         # ==================== 限制与判据 ====================
         self.limits = dict(
@@ -146,12 +143,12 @@ class QuadcopterEnv(gym.Env):
             w_cmd_max=2e3,
             overshoot_z_tol=0.2,
             normalize_rate_by_dt=True,
-            
-            # PID参数单步最大变化率（放宽限制）
-            pid_max_change_per_step=0.08,  # 一阶速率限制
-            pid_max_accel_per_step=0.02,   # 二阶速率限制
-
+            overshoot_pos_tol=1.0,
+            overshoot_vel_tol=0.5,
+            overshoot_att_tol=5.0,
+            overshoot_ang_vel_tol=30.0,
         )
+
         # ==================== 回合跟踪 ====================
         self.current_step = 0
         self.current_substep = 0
@@ -163,16 +160,14 @@ class QuadcopterEnv(gym.Env):
             low=-1.0, high=1.0, shape=(20,), dtype=np.float32
         )
 
-        # ====================  观测空间定义（关键改进） ====================
+        # ====================  观测空间定义（去掉误差/参数变化率） ====================
         # 观测维度计算：
         # - 参考状态: pos(3) + vel(3) + eul(3) + omega(3) = 12
         # - 反馈状态: pos(3) + vel(3) + eul(3) + omega(3) = 12
         # - 误差信号: pos_err(3) + vel_err(3) + eul_err(3) + omega_err(3) = 12
-        # - 误差变化率: pos_err_rate(3) + vel_err_rate(3) + eul_err_rate(3) + omega_err_rate(3) = 12
         # - PID参数归一化: 20维（当前PID增益值，归一化到[-1,1]）
-        # - PID变化率: 20维（PID参数相对于上一步的变化率）
-        # 总计: 12 + 12 + 12 + 12 + 20 + 20 = 88
-        obs_dim = 88
+        # 总计: 12 + 12 + 12 + 20 = 56
+        obs_dim = 56
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
@@ -191,10 +186,13 @@ class QuadcopterEnv(gym.Env):
         
         self.pid_safe_max = np.array([
             2.0, 1.5,           # pos_P_gains
+
             15.0, 15.0,          # vel_P_gains
             60.0, 3.0,          # vel_I_gains
             2.0, 2.0,           # vel_D_gains
+
             12.0, 12.0, 5.0,    # att_P_gains
+
             0.5, 0.6, 0.6,      # rate_P_gains
             10.0, 10.0, 10.0,   # rate_I_gains
             0.01, 0.01, 0.01    # rate_D_gains
@@ -206,39 +204,29 @@ class QuadcopterEnv(gym.Env):
         # ==================== 基线PID参数（初始化为中值，并应用到ctrl） ====================
         self.pid_K_prev_vec = np.array([
             1.0, 0.8,                   # pos_P_gains: Pxy, Pz
-            12, 8.5,                   # vel_P_gains: Pxydot, Pzdot
+            7, 8.5,                   # vel_P_gains: Pxydot, Pzdot
             10.0, 1.6,                  # vel_I_gains: Ixydot, Izdot
-            1.5, 1.0,                  # vel_D_gains: Dxydot, Dzdot
+            0.3, 1.0,                  # vel_D_gains: Dxydot, Dzdot
             8.0, 8.0, 2.75,             # att_P_gains: Pphi, Ptheta, Ppsi
-            0.6, 0.305, 0.305,        # rate_P_gains: Pp, Pq, Pr
-            5.0, 5.0, 5.0,              # rate_I_gains: Ip, Iq, Ir
+            0.5, 0.5, 0.305,            # rate_P_gains: Pp, Pq, Pr
+            3.0, 3.0, 5.0,              # rate_I_gains: Ip, Iq, Ir
             0.008, 0.008, 0.005         # rate_D_gains: Dp, Dq, Dr
         ],dtype=np.float32)
         self.init_actions = self.normalize_pid_parameters(self.pid_K_prev_vec)
-        # print("[PID] Initial PID parameters:", self.init_actions)
-
+        self.prev_action = self.init_actions
         self._apply_pid_parameters(self.init_actions)
 
         # 记录PID变化信息
         self.last_pid_delta_norm = 0.0
         self.last_pid_delta_max = 0.0
-
+        
         # 步级日志与 segment 统计
         self.step_log_rows = []
 
-        # 修复：重置时初始化为零（归一化空间）
-        self.prev_pos_err = np.zeros(3, dtype=np.float32)
-        self.prev_vel_err = np.zeros(3, dtype=np.float32)
-        self.prev_eul_err = np.zeros(3, dtype=np.float32)
-        self.prev_omega_err = np.zeros(3, dtype=np.float32)
-        self.prev_action = np.zeros(20, dtype=np.float32)
+        # 误差变化率相关缓存已移除
         self.prev_rmse_vel_xy = 0.0
         self.prev_rmse_vel_z = 0.0
-        
-        # 修复：重置PID参数历史缓存（归一化空间）
-        self._prev_pid_normalized = np.zeros(20, dtype=np.float32)
-        self._prev_pid_K_vec = self.pid_K_prev_vec.copy()
-        
+  
         # ==================== 姿态越界阈值课程学习 ====================
         self.attitude_bound_start = attitude_bound_start  # 90度（初始）
         self.attitude_bound_end = attitude_bound_end      # 50度（最终）
@@ -251,7 +239,7 @@ class QuadcopterEnv(gym.Env):
         self.current_epoch = 0
         
         log.info(
-            f"📐 Attitude bound curriculum: "
+            f"Attitude bound curriculum: "
             f"{attitude_bound_start}° → {attitude_bound_end}° "
             f"over {attitude_bound_decay_epochs} epochs"
         )
@@ -265,13 +253,7 @@ class QuadcopterEnv(gym.Env):
     
     def update_attitude_bound(self, current_epoch: int) -> float:
         """
-         新增：根据当前epoch更新姿态越界阈值（线性衰减）
-        
-        参数:
-            current_epoch: 当前训练轮次
-        
-        返回:
-            当前阈值（度）
+        根据当前epoch更新姿态越界阈值（线性衰减）
         """
         self.current_epoch = current_epoch
         
@@ -287,13 +269,6 @@ class QuadcopterEnv(gym.Env):
         
         # 转换为弧度并更新
         self.attitude_bound_current = np.deg2rad(current_deg)
-        
-        # 每50个epoch打印一次（避免日志过多）
-        if current_epoch % 50 == 0:
-            log.info(
-                f"📐 Epoch {current_epoch}: Attitude bound updated to {current_deg:.1f}° "
-                f"(progress: {progress*100:.1f}%)"
-            )
         
         return current_deg
     # =========================
@@ -322,7 +297,6 @@ class QuadcopterEnv(gym.Env):
         self.episode_vel_all = np.zeros((T, len(self.quad.vel)))
         self.episode_euler_all = np.zeros((T, len(self.quad.euler)))
         self.episode_omega_all = np.zeros((T, len(self.quad.omega)))
-        self.episode_quat_all = np.zeros((T, len(self.quad.quat)))
 
         self.episode_pos_des_all = np.zeros((T, len(self.quad.pos)))
         self.episode_vel_des_all = np.zeros((T, len(self.quad.vel)))
@@ -335,7 +309,7 @@ class QuadcopterEnv(gym.Env):
     def reset(self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         super().reset(seed=seed)
 
-        self._already_terminated = False  # ⬅️ 清除终止标记
+        self._already_terminated = False  # 清除终止标记
 
         if seed is not None:
             np.random.seed(seed)
@@ -351,39 +325,24 @@ class QuadcopterEnv(gym.Env):
 
         # 重置仿真组件（会重新初始化控制器）
         self._initialize_simulation()
-        log.info(f"🔄 reset() called: env_id={id(self)}, resetting to step 0, time={self.time:.3f}s")
+        log.info(f" reset() called: env_id={id(self)}, resetting to step 0, time={self.time:.3f}s")
 
         # ==================== 基线PID参数（初始化为中值，并应用到ctrl） ====================
         self.pid_K_prev_vec = (self.pid_safe_min + self.pid_safe_max) / 2.0
         self.init_actions = np.zeros(20)
         self._apply_pid_parameters(self.init_actions)
-               
-        # 应用速率限制
-        if hasattr(self.ctrl, 'velMax') and isinstance(self.rate_limit_scale, (int, float)):
-            self.ctrl.velMax *= float(self.rate_limit_scale)
-        if hasattr(self.ctrl, 'velMaxAll') and isinstance(self.rate_limit_scale, (int, float)):
-            self.ctrl.velMaxAll *= float(self.rate_limit_scale)
-        if hasattr(self.ctrl, 'tiltMax') and isinstance(self.rate_limit_scale, (int, float)):
-            self.ctrl.tiltMax *= float(self.rate_limit_scale)
-        if hasattr(self.ctrl, 'rateMax') and isinstance(self.rate_limit_scale, (int, float)):
-            self.ctrl.rateMax *= float(self.rate_limit_scale)
 
         if options and options.get('random_init', False):
             noise = np.random.normal(0, 0.1, 3)
             self.quad.pos += noise
             self.quad.state[0:3] = self.quad.pos
 
-        #  重置历史状态缓存
-        self.prev_pos_err = np.zeros(3, dtype=np.float32)
-        self.prev_vel_err = np.zeros(3, dtype=np.float32)
-        self.prev_eul_err = np.zeros(3, dtype=np.float32)
-        self.prev_omega_err = np.zeros(3, dtype=np.float32)
-        self.prev_action = np.zeros(20, dtype=np.float32)
+    #  重置历史状态缓存（去除误差变化率缓存）
+        self.prev_action = self.init_actions
         self.prev_rmse_vel_xy = 0.0
         self.prev_rmse_vel_z = 0.0
         
-        # 重置PID参数历史缓存
-        self._prev_pid_normalized = np.zeros(20, dtype=np.float32)
+    # 去除PID变化率历史缓存
         
         # 重置PID变化记录
         self.last_pid_delta_norm = 0.0
@@ -425,7 +384,7 @@ class QuadcopterEnv(gym.Env):
         K_min = self.pid_safe_min
         K_max = self.pid_safe_max
         
-        # 新增：验证边界形状
+        # 验证边界形状
         assert K_min.shape == (20,) and K_max.shape == (20,), \
             f"K_min/K_max shape mismatch: {K_min.shape}, {K_max.shape}"
         
@@ -433,7 +392,7 @@ class QuadcopterEnv(gym.Env):
         
         # 改进：更明确的初始化检查（应该在 __init__ 中完成）
         if not hasattr(self, 'pid_K_prev_vec') or self.pid_K_prev_vec is None:
-            log.warning("⚠️ pid_K_prev_vec not initialized in __init__! Using mid-range fallback...")
+            log.warning(" pid_K_prev_vec not initialized in __init__! Using mid-range fallback...")
             self.pid_K_prev_vec = (K_min + K_max) / 2.0
         
         K_prev_vec = self.pid_K_prev_vec
@@ -443,32 +402,11 @@ class QuadcopterEnv(gym.Env):
         
         # 可选：平滑过渡（EMA 低通滤波）
         if self.enable_smooth_transition:
-            # alpha ∈ (0, 1]: alpha=1 无平滑，alpha→0 强平滑
+            # alpha ∈ (0, 1]: alpha=0 无平滑，alpha→1 强平滑
             alpha = float(np.clip(self.alpha, 1e-6, 1.0))
-            K_new_vec = (1.0 - alpha) * K_prev_vec + alpha * K_target
+            K_new_vec = alpha * K_prev_vec + (1.0 - alpha) * K_target
         else:
             K_new_vec = K_target
-        
-        # 新增：二阶速率限制（限制加速度）
-        if hasattr(self, '_prev_pid_K_vec'):
-            # 计算速度（一阶导数）
-            pid_velocity = K_new_vec - K_prev_vec
-            prev_velocity = K_prev_vec - self._prev_pid_K_vec
-            
-            # 计算加速度（二阶导数）
-            pid_accel = pid_velocity - prev_velocity
-            
-            # 限制加速度（每步最大变化的变化）
-            max_accel = self.limits.get("pid_max_accel_per_step", 0.02)
-            accel_norm = np.linalg.norm(pid_accel)
-            if accel_norm > max_accel:
-                pid_accel = pid_accel * (max_accel / accel_norm)
-                # 修正后的速度
-                pid_velocity = prev_velocity + pid_accel
-                # 修正后的PID参数
-                K_new_vec = K_prev_vec + pid_velocity
-        # 保存历史（用于下一步的二阶限制）
-        self._prev_pid_K_vec = K_prev_vec.copy()
         
         # 最终边界保护（必须！平滑可能导致越界）
         K_new_vec = np.clip(K_new_vec, K_min, K_max)
@@ -488,7 +426,7 @@ class QuadcopterEnv(gym.Env):
         return gains_from_action
 
     # =========================
-    # 辅助函数：PID参数向量解包
+    # 辅助函数
     # =========================
     def _unpack_vec_to_groups(self, K_vec: np.ndarray) -> dict:
         """将20维向量解包为8组增益"""
@@ -522,6 +460,157 @@ class QuadcopterEnv(gym.Env):
             "rate_I_gains": rate_I_gains,
             "rate_D_gains": rate_D_gains,
         }
+    
+    def _error_gated_action_adaptation(self, action: np.ndarray) -> np.ndarray:
+        """
+        分层+分通道误差门控机制（12 个独立通道）
+        
+        根据当前各通道误差大小，对 action 进行冻结/限幅/放开处理：
+        - 小误差（< thresh1）：冻结该通道 action
+        - 中误差（thresh1 ~ thresh2）：限幅调整
+        - 大误差（> thresh2）：自由探索
+        
+        Args:
+            action: 原始 action（20维）
+        
+        Returns:
+            处理后的 action（20维）
+        """
+        # ============================================================
+        # 提取当前观测中的误差信号（已归一化）
+        # ============================================================
+        obs_cur = self._get_observation(self.ctrl.sDesCalc)
+        
+        pos_err = obs_cur[24:27]    # [x, y, z]
+        vel_err = obs_cur[27:30]    # [x, y, z]
+        att_err = obs_cur[30:33]    # [roll, pitch, yaw]
+        omega_err = obs_cur[33:36]  # [p, q, r]
+
+        # ============================================================
+        # 阈值配置（建议后续移到 __init__）
+        # ============================================================
+        thresh1 = 0.03      # 小误差冻结阈值
+        thresh2 = 0.3       # 大误差放开阈值
+        limit_delta = 0.5   # 限幅范围
+
+        # ============================================================
+        # 通用门控函数（闭包，可访问外部变量）
+        # ============================================================
+        def _gate_indices(err_val, idxs):
+            """根据误差值对指定 action 索引进行门控"""
+            if err_val < thresh1:
+                # 冻结：保持上一步 action
+                action[idxs] = self.prev_action[idxs]
+            elif thresh1 <= err_val < thresh2:
+                # 限幅：限制变化幅度
+                delta = np.clip(action[idxs] - self.prev_action[idxs], 
+                            -limit_delta, limit_delta)
+                action[idxs] = self.prev_action[idxs] + delta
+            else:
+                # 放开：不干预（保持原 action）
+                pass
+
+        # ============================================================
+        # 1. 位置环（2 通道：xy, z）["xyz_pos", "xy_vel_z_pos", "xyz_vel"] 
+        # ============================================================
+        if self.control_type == "xyz_vel":
+            pos_err_xy = 0
+            pos_err_z = 0
+        elif self.control_type == "xyz_pos":
+            pos_err_xy = max(abs(pos_err[0]), abs(pos_err[1]))
+            pos_err_z = abs(pos_err[2])
+        elif self.control_type == "xy_vel_z_pos":
+            pos_err_xy = 0
+            pos_err_z = abs(pos_err[2])
+        
+        _gate_indices(pos_err_xy, [0])  # pos_P_xy
+        _gate_indices(pos_err_z, [1])   # pos_P_z
+
+        # ============================================================
+        # 2. 速度环（2 通道：xy, z）   
+        # ============================================================
+        vel_err_xy = max(abs(vel_err[0]), abs(vel_err[1]))
+        vel_err_z = abs(vel_err[2])
+        
+        _gate_indices(vel_err_xy, [2, 4, 6])  # vel_P/I/D_xy
+        _gate_indices(vel_err_z, [3, 5, 7])   # vel_P/I/D_z
+
+        # ============================================================
+        # 3. 姿态环（3 通道：roll, pitch, yaw）
+        # ============================================================
+        att_err_roll = abs(att_err[0])
+        att_err_pitch = abs(att_err[1])
+        att_err_yaw = abs(att_err[2])
+        
+        _gate_indices(att_err_roll, [8])    # att_P_roll
+        _gate_indices(att_err_pitch, [9])   # att_P_pitch
+        _gate_indices(att_err_yaw, [10])    # att_P_yaw
+
+        # ============================================================
+        # 4. 角速度环（3 通道：p, q, r）
+        # ============================================================
+        omega_err_roll = abs(omega_err[0])   # p (roll rate)
+        omega_err_pitch = abs(omega_err[1])  # q (pitch rate)
+        omega_err_yaw = abs(omega_err[2])    # r (yaw rate)
+        
+        _gate_indices(omega_err_roll, [11, 14, 17])    # rate_P/I/D_p
+        _gate_indices(omega_err_pitch, [12, 15, 18])   # rate_P/I/D_q
+        _gate_indices(omega_err_yaw, [13, 16, 19])     # rate_P/I/D_r
+
+        # ============================================================
+        # 返回处理后的 action
+        # ============================================================
+        return action
+
+    def _log_reward_to_csv(self, reward_dict):
+        """将奖励详情记录到CSV文件"""
+        # 定义日志文件路径
+        log_dir = "logs/reward_debug"
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # 使用时间戳区分不同训练会话
+        if not hasattr(self, 'csv_log_file'):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.csv_log_file = os.path.join(log_dir, f"reward_log_{timestamp}.csv")
+            self.csv_initialized = False
+        
+        # 准备数据行
+        row_data = {
+            'step': getattr(self, 'step_count', 0),
+            'episode': getattr(self, 'episode_count', 0),
+            **reward_dict  # 展开所有奖励组件
+        }
+        
+        # 写入CSV
+        file_exists = os.path.isfile(self.csv_log_file)
+        with open(self.csv_log_file, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=row_data.keys())
+            
+            # 首次写入添加表头
+            if not file_exists or not self.csv_initialized:
+                writer.writeheader()
+                self.csv_initialized = True
+            
+            writer.writerow(row_data)
+
+    def _calculate_vel_tracking_bonus_exp(rmse_vel_xy, rmse_vel_z):
+        """
+        速度跟踪奖励（指数曲线）
+        rmse越接近0，penalty增长越快
+        rmse: 0.5 → 0.0
+        bonus: 1.0 → 10.0
+        """
+        k = -2.0 * np.log(9.0)  # ≈ -4.394
+        
+        bonus_xy = 10.0 - 9.0 * np.exp(k * rmse_vel_xy)
+        bonus_z = 10.0 - 9.0 * np.exp(k * rmse_vel_z)
+        
+        bonus_xy = np.clip(bonus_xy, 1.0, 10.0)
+        bonus_z = np.clip(bonus_z, 1.0, 10.0)
+        
+        bonus_total = (bonus_xy + bonus_z) / 2.0
+        
+        return bonus_total
     # =========================
     # step() 函数（主循环）
     # =========================
@@ -530,18 +619,23 @@ class QuadcopterEnv(gym.Env):
         执行一个环境步骤
         """
         # ============================================================
-        # 阶段1: 动作处理
+        # 阶段1: 误差门控动作调整
         # ============================================================
-        # 保存历史动作 
+        action = self._error_gated_action_adaptation(action)
+
+        # 保存历史动作（用于下一步比较）
         self.prev_action = np.asarray(action, dtype=np.float32).ravel().copy()
 
+        # ============================================================
+        # 阶段2: 应用 PID 参数
+        # ============================================================
         self.step_action = self._apply_pid_parameters(action)
         
-        substeps = self.substeps_per_rl
+        substeps_count = self.substeps_per_rl
         
         step_samples: List[Dict[str, float]] = []
 
-        # 新增：如果是评估模式，收集子步详细数据
+        # 如果是评估模式，收集子步详细数据
         substep_records = [] if self.eval_mode else None
 
         #  使用当前状态初始化 prev_cache
@@ -554,7 +648,7 @@ class QuadcopterEnv(gym.Env):
         terminated = False
         truncated = False
         
-        for substep_i in range(substeps):
+        for substep_i in range(substeps_count):
             # 2a) 生成期望轨迹
             sDes = self.traj.desiredState(self.time, self.dt, self.quad)
             
@@ -573,7 +667,7 @@ class QuadcopterEnv(gym.Env):
             self.time += self.dt
             self.current_substep += 1
 
-            # 2f) 提取误差指标
+            # 2f) 提取误差
             sDesclc = self.ctrl.sDesCalc
             m = self._extract_metrics(sDesclc)
 
@@ -581,18 +675,18 @@ class QuadcopterEnv(gym.Env):
             sample = self._collect_step_sample(m, prev_cache)
             step_samples.append(sample)
 
-            # 2h) 边界检查（姿态超过±90度立即终止）
+            # 2h) 边界检查（姿态超过边界立即终止）
             if self._is_out_of_bounds():
                 # 标记最后一个样本为异常
                 terminated = True
 
                 log.warning(
-                    f" step() called: Out of bounds at substep {substep_i+1}/{substeps} "
+                    f" step() called: Out of bounds at substep {substep_i+1}/{substeps_count} "
                     f"(step {self.current_step}, time {self.time:.3f}s, env_id={id(self)})"
                 )
 
                 # 填充缺失子步（保持样本数一致性，避免奖励计算异常）
-                missing_substeps = substeps - len(step_samples)
+                missing_substeps = substeps_count - len(step_samples)
                 if missing_substeps > 0:
                     # 用最后一个有效样本填充（标记为padding）
                     last_sample = step_samples[-1].copy()
@@ -607,13 +701,14 @@ class QuadcopterEnv(gym.Env):
                 
                 break
 
-        # ✅ 新增：越界后立即返回，不执行后续逻辑
+        # 越界后立即返回，不执行后续逻辑
         if terminated:
-            self.current_step += 1  # ⬅️ 在返回前更新计数器
-            self._already_terminated = True  # ⬅️ 标记已终止
+            self.current_step += 1  # 在返回前更新计数器
+            self._already_terminated = True  # 标记已终止
 
             # 施加失败惩罚
             reward_before_scale = self.failure_penalty
+            self.terminated_count += 1
             reward = reward_before_scale * self.reward_scale
             self.episode_reward += reward
             
@@ -628,7 +723,7 @@ class QuadcopterEnv(gym.Env):
                 f"penalty: {self.failure_penalty} (scaled: {reward:.2f})"
             )
             
-            return obs, reward, terminated, False, info  # ⬅️ 立即返回
+            return obs, reward, terminated, False, info  # 立即返回
 
         # ============================================================
         # 阶段3: 奖励计算
@@ -636,7 +731,7 @@ class QuadcopterEnv(gym.Env):
         
         # 正常情况：计算完整奖励
         # 3.1 基础奖励（基于RMSE误差）
-        segment_reward, metrics = self._compute_segment_reward_step(step_samples)
+        segment_reward, reward_for_debug, metrics = self._compute_segment_reward_step(step_samples)
                     
         # 3.3 速度跟踪成功奖励（正向激励）
         vel_tracking_bonus = 0.0
@@ -645,12 +740,14 @@ class QuadcopterEnv(gym.Env):
             rmse_vel_z = metrics.get("rmse_vel_z", 999.0)
             
             # 阈值奖励
-            if rmse_vel_xy < 0.5 and rmse_vel_z < 0.5:
-                vel_tracking_bonus += 2.0
-                if rmse_vel_xy < 0.2 and rmse_vel_z < 0.2:
-                    vel_tracking_bonus += 5.0
+            # if rmse_vel_xy < 0.5 and rmse_vel_z < 0.5:
+            #     vel_tracking_bonus += 2.0
+            #     if rmse_vel_xy < 0.2 and rmse_vel_z < 0.2:
+            #         vel_tracking_bonus += 5.0
+
+            vel_tracking_bonus = self._calculate_vel_tracking_bonus_exp(rmse_vel_xy, rmse_vel_z)
             
-            #  修复：改进奖励（误差下降），添加上限约束防止震荡
+            #  改进奖励（误差下降），添加上限约束防止震荡
             vel_improvement_xy = self.prev_rmse_vel_xy - rmse_vel_xy
             vel_improvement_z = self.prev_rmse_vel_z - rmse_vel_z
             
@@ -663,10 +760,18 @@ class QuadcopterEnv(gym.Env):
             # 更新历史
             self.prev_rmse_vel_xy = rmse_vel_xy
             self.prev_rmse_vel_z = rmse_vel_z
-        
+
+        # 记录调试信息
+        reward_for_debug['segment_reward'] = segment_reward
+        reward_for_debug['vel_tracking_bonus'] = vel_tracking_bonus  
+
         # 3.4 合成总奖励（缩放前）
         reward_before_scale = segment_reward + vel_tracking_bonus
+        reward_for_debug['reward_total_before_scale'] = reward_before_scale
 
+        # 记录到CSV文件
+        if self.eval_mode:
+            self._log_reward_to_csv(reward_for_debug)
         # ============================================================
         # 阶段4: 终止条件判断
         # ============================================================
@@ -713,14 +818,13 @@ class QuadcopterEnv(gym.Env):
         
         # 检查索引越界
         if idx >= self.episode_t_all.shape[0]:
-            log.warning(f" substep索引 {idx} 超出预分配数组大小")
+            log.error(f" substep索引 {idx} 超出预分配数组大小")
             return None
         
         # 记录数据到内部数组（训练和评估都需要）
         self.episode_t_all[idx] = self.time
         self.episode_pos_all[idx] = self.quad.pos
         self.episode_vel_all[idx] = self.quad.vel
-        self.episode_quat_all[idx] = self.quad.quat
         self.episode_omega_all[idx] = self.quad.omega
         self.episode_euler_all[idx] = self.quad.euler
         
@@ -754,110 +858,10 @@ class QuadcopterEnv(gym.Env):
             return None
 
     # =========================
-    #  观测函数
-    # =========================
-    #-1-###############################################################
-    def _get_observation(self, sDesCalc: np.ndarray) -> np.ndarray:
-        """
-        构建观测向量（88维）
-        """
-        # 参考状态
-        pos_ref = sDesCalc[0:3]
-        vel_ref = sDesCalc[3:6]
-        eul_ref = _quaternion_to_euler(sDesCalc[9:13])
-        omega_ref = sDesCalc[13:16]
-
-        # 反馈状态
-        pos_fb = self.quad.pos
-        vel_fb = self.quad.vel
-        eul_fb = self.quad.euler
-        omega_fb = self.quad.omega
-
-        # 误差信号（核心特征）
-        pos_err = pos_ref - pos_fb
-        vel_err = vel_ref - vel_fb
-        eul_err = eul_ref - eul_fb
-        eul_err = np.arctan2(np.sin(eul_err), np.cos(eul_err))  # 将欧拉角误差包裹到 [-pi, pi]
-        omega_err = omega_ref - omega_fb
-        
-        # 误差归一化
-        pos_err_norm = np.clip(pos_err / 10.0, -1, 1)      # 位置误差 /10m
-        vel_err_norm = np.clip(vel_err / 15.0, -1, 1)      # 速度误差 /15m/s
-        eul_err_norm = np.clip(eul_err / np.pi, -1, 1)     # 角度误差 /π
-        omega_err_norm = np.clip(omega_err / 10.0, -1, 1)  # 角速度误差 /10rad/s
-        
-        # 2. 误差变化率（基于归一化后的误差）
-        dt_safe = max(self.rl_dt, 1e-6)
-        pos_err_rate = (pos_err_norm - self.prev_pos_err) / dt_safe
-        vel_err_rate = (vel_err_norm - self.prev_vel_err) / dt_safe
-        eul_err_rate = (eul_err_norm - self.prev_eul_err) / dt_safe
-        omega_err_rate = (omega_err_norm - self.prev_omega_err) / dt_safe
-        
-        # 变化率归一化（假设最大变化速率为 ±5/s）
-        max_rate = 5.0
-        pos_err_rate = np.clip(pos_err_rate / max_rate, -1, 1)
-        vel_err_rate = np.clip(vel_err_rate / max_rate, -1, 1)
-        eul_err_rate = np.clip(eul_err_rate / max_rate, -1, 1)
-        omega_err_rate = np.clip(omega_err_rate / max_rate, -1, 1)
-        
-        # 更新历史误差（保存归一化后的值）
-        self.prev_pos_err = pos_err_norm.copy()
-        self.prev_vel_err = vel_err_norm.copy()
-        self.prev_eul_err = eul_err_norm.copy()
-        self.prev_omega_err = omega_err_norm.copy()
-        
-        # 3. PID参数归一化到[-1, 1]
-        if hasattr(self, 'pid_K_prev_vec') and self.pid_K_prev_vec is not None:
-            pid_normalized = 2.0 * (self.pid_K_prev_vec - self.pid_safe_min) / (self.pid_safe_max - self.pid_safe_min + 1e-8) - 1.0
-            pid_normalized = np.clip(pid_normalized, -1.0, 1.0)
-        else:
-            pid_normalized = np.zeros(20, dtype=np.float32)
-        
-        # 4. PID参数变化率（修正归一化）
-        if hasattr(self, '_prev_pid_normalized'):
-            # 已归一化空间的变化率：理论最大值 = 2/dt_safe
-            raw_rate = (pid_normalized - self._prev_pid_normalized) / dt_safe
-            # 修正：根据实际dt动态调整max_rate
-            max_rate = 2.0 / dt_safe  # 理论最大值（从-1跳到+1）
-            pid_rate = np.clip(raw_rate / max_rate, -1.0, 1.0)
-        else:
-            pid_rate = np.zeros(20, dtype=np.float32)
-        self._prev_pid_normalized = pid_normalized.copy()
-        
-        # 参考状态和反馈状态归一化
-        pos_ref_norm = np.clip(pos_ref / 10.0, -1, 1)
-        vel_ref_norm = np.clip(vel_ref / 15.0, -1, 1)
-        eul_ref_norm = np.clip(eul_ref / np.pi, -1, 1)
-        omega_ref_norm = np.clip(omega_ref / 10.0, -1, 1)
-        
-        pos_fb_norm = np.clip(pos_fb / 10.0, -1, 1)
-        vel_fb_norm = np.clip(vel_fb / 15.0, -1, 1)
-        eul_fb_norm = np.clip(eul_fb / np.pi, -1, 1)
-        omega_fb_norm = np.clip(omega_fb / 10.0, -1, 1)
-        
-        # 拼接观测向量（88维，全部已归一化）
-        obs = np.concatenate([
-            # 参考状态 (12)
-            pos_ref_norm, vel_ref_norm, eul_ref_norm, omega_ref_norm,
-            # 反馈状态 (12)
-            pos_fb_norm, vel_fb_norm, eul_fb_norm, omega_fb_norm,
-            # 误差信号 (12)
-            pos_err_norm, vel_err_norm, eul_err_norm, omega_err_norm,
-            # 误差变化率 (12)
-            pos_err_rate, vel_err_rate, eul_err_rate, omega_err_rate,
-            # PID参数归一化 (20)
-            pid_normalized,
-            # PID变化率 (20)
-            pid_rate
-        ])  
-
-        return obs.astype(np.float32)
-    
-    # =========================
     # 奖励设计
     # =========================
     def _extract_metrics(self, sDesCalc: np.ndarray) -> Dict[str, Any]:
-        """从 sDesCalc 及当前状态提取误差指标"""
+        """从 sDesCalc 及当前状态提取误差"""
         pos_ref = sDesCalc[0:3]
         vel_ref = sDesCalc[3:6]
         eul_ref = _quaternion_to_euler(sDesCalc[9:13])
@@ -872,12 +876,16 @@ class QuadcopterEnv(gym.Env):
             return (a + np.pi) % (2 * np.pi) - np.pi
 
         pos_err_vec = pos_ref - pos
+        pos_err_x = pos_err_vec[0]
+        pos_err_y = pos_err_vec[1]
+        pos_err_z = pos_err_vec[2]
         pos_err_xy = float(np.linalg.norm(pos_err_vec[:2]))
-        pos_err_z = float(np.abs(pos_err_vec[2]))
 
         vel_err_vec = vel_ref - vel
+        vel_err_x = vel_err_vec[0]
+        vel_err_y = vel_err_vec[1]
+        vel_err_z = vel_err_vec[2]
         vel_err_xy = float(np.linalg.norm(vel_err_vec[:2]))
-        vel_err_z = float(np.abs(vel_err_vec[2]))
 
         att_err_vec = eul_ref - euler
         att_err_vec = np.array([angle_wrap(att_err_vec[0]),
@@ -895,20 +903,26 @@ class QuadcopterEnv(gym.Env):
         omega_norm = float(np.linalg.norm(omega_err_vec))
 
         return {
-            "pos_err_xy": pos_err_xy,
+            "pos_err_x": pos_err_x,
+            "pos_err_y": pos_err_y,
             "pos_err_z": pos_err_z,
-            "vel_err_xy": vel_err_xy,
-            "vel_err_z": vel_err_z,
+            "pos_err_xy": pos_err_xy,
 
-            "att_norm": att_norm,
+            "vel_err_x": vel_err_x,
+            "vel_err_y": vel_err_y,
+            "vel_err_z": vel_err_z,
+            "vel_err_xy": vel_err_xy,
+
             "att_err_roll": abs(att_err_roll),
             "att_err_pitch": abs(att_err_pitch),
             "att_err_yaw": att_err_yaw,
+            "att_norm": att_norm,
 
-            "omega_norm": omega_norm,
             "omega_err_p": omega_err_p,
             "omega_err_q": omega_err_q,
             "omega_err_r": omega_err_r,
+            "omega_norm": omega_norm,
+
         }
 
     def _collect_step_sample(self, m: Dict[str, Any], prev_cache: Dict[str, Any]) -> Dict[str, float]:
@@ -923,9 +937,9 @@ class QuadcopterEnv(gym.Env):
         else:
             control_effort = 0.0
 
-        dv = 0.0
-        domega = 0.0
-        du = 0.0
+        dv = 0.0        # 速度变化率
+        domega = 0.0    # 角速度变化率
+        du = 0.0        # 控制输入变化率
 
         if prev_cache.get("vel") is not None:
             dv = float(np.linalg.norm(self.quad.vel - prev_cache["vel"]))
@@ -954,27 +968,21 @@ class QuadcopterEnv(gym.Env):
             if np.any(self.ctrl.w_cmd < wmin) or np.any(self.ctrl.w_cmd > wmax):
                 saturation_hit = 1
 
-        z_err = float(self.quad.pos[2] - self.target_pos[2])
-        vz = float(self.quad.vel[2])
-        overshoot_tol = self.limits["overshoot_z_tol"]
-        overshoot_hit = 1 if (z_err * np.sign(vz) > 0 and abs(z_err) > overshoot_tol) else 0
+        # 超调检测，应包括三轴速度，三轴姿态，三轴角速度等
+        overshoot_hit = 0
+        overshoot_hit = self._detect_overshoot(m)
 
-        #  计算即时奖励
-        sw = self.segment_weights
-        instant_reward = -(
-            sw["W_vel_xy"] * m["vel_err_xy"] +
-            sw["W_vel_z"] * m["vel_err_z"] +
-            sw["W_att"] * m["att_norm"] +
-            sw["W_omega"] * m["omega_norm"] +
-            sw["W_du"] * du
-        )
-        
         entry = {
             # 原有指标
-            "pos_xy2": m["pos_err_xy"]**2,
+            "pos_x2": m["pos_err_x"]**2,
+            "pos_y2": m["pos_err_y"]**2,
             "pos_z2": m["pos_err_z"]**2,
-            "vel_xy2": m["vel_err_xy"]**2,
+            "pos_xy2": m["pos_err_xy"]**2,
+
+            "vel_x2": m["vel_err_x"]**2,
+            "vel_y2": m["vel_err_y"]**2,
             "vel_z2": m["vel_err_z"]**2,
+            "vel_xy2": m["vel_err_xy"]**2,
 
             "att2": m["att_norm"]**2,
             "omega2": m["omega_norm"]**2,
@@ -986,18 +994,62 @@ class QuadcopterEnv(gym.Env):
 
             "sat_hit": saturation_hit,
             "over_hit": overshoot_hit,
-            
-            #  新增：子步级别诊断信息
-            "instant_reward": instant_reward,
-            "substep_idx": self.current_substep,
-            "time": self.time,
-            
-            #  新增：原始误差值（用于分析）
-            "vel_err_xy": m["vel_err_xy"],
-            "vel_err_z": m["vel_err_z"],
-            "att_norm": m["att_norm"],
         }
         return entry
+
+    def _detect_overshoot(self, error):
+        # 初始化超调检测结果
+        overshoot_results = {
+            "vel": [0, 0, 0],     # 三轴速度超调结果
+            "att": [0, 0, 0],     # 三轴姿态超调结果
+            "ang_vel": [0, 0, 0]  # 三轴角速度超调结果
+        }
+        
+        # 定义对应的容忍度 
+        vel_tol = self.limits["overshoot_vel_tol"]
+        att_tol = self.limits["overshoot_att_tol"]
+        ang_vel_tol = self.limits["overshoot_ang_vel_tol"]
+
+        # 把需要用到的误差根据通道分类
+        pos_err = [error["pos_err_x"], error["pos_err_y"], error["pos_err_z"]]
+        vel_err = [error["vel_err_x"], error["vel_err_y"], error["vel_err_z"]]
+        att_err = [error["att_err_roll"], error["att_err_pitch"], error["att_err_yaw"]]
+        ang_vel_err = [error["omega_err_p"], error["omega_err_q"], error["omega_err_r"]]
+
+        # 记录是否发生超调
+        overthrow_detected = False
+
+        # 检测超调：三轴速度
+        for i in range(3):  # 0: X, 1: Y, 2: Z
+            current_vel_err = vel_err[i]  # 从分类后的 vel_err 提取误差
+            current_vz = float(self.quad.vel[i])
+            if current_vel_err * np.sign(current_vz) < 0 and abs(current_vel_err) > vel_tol:
+                overshoot_results['vel'][i] = 1
+                overthrow_detected = True  # 检测到超调
+
+        # 检测超调：三轴姿态
+        for i in range(3):  # 0: Roll, 1: Pitch, 2: Yaw
+            current_att_err = att_err[i]  # 从分类后的 att_err 提取误差
+            current_ang_att = float(self.quad.euler[i]) #self.quad.euler : yaw,pitch,roll
+            if current_att_err * np.sign(current_ang_att) < 0 and abs(current_att_err) > att_tol:
+                overshoot_results['att'][i] = 1
+                overthrow_detected = True  # 检测到超调
+
+        # 检测超调：三轴角速度
+        for i in range(3):  # 0: Roll rate, 1: Pitch rate, 2: Yaw rate
+            current_ang_vel_err = ang_vel_err[i]  # 从分类后的 ang_vel_err 提取误差
+            current_vz = float(self.quad.omega[i])
+            if current_ang_vel_err * np.sign(current_vz) < 0 and abs(current_ang_vel_err) > ang_vel_tol:
+                overshoot_results['ang_vel'][i] = 1
+                overthrow_detected = True  # 检测到超调
+
+        # # 仅在发生超调时记录
+        # if overthrow_detected:
+        #     # 这里可以添加记录超调的逻辑，具体实现可以根据需要进行修改
+        #     log.warning("超调发生！")  # 示例操作，您可以替换为日志记录或其他动作
+
+        # 返回结果可以选择仅返回是否发生超调或详细结果
+        return 1 if overthrow_detected else 0
 
     def _compute_segment_reward_step(self, samples: List[Dict[str, float]]) -> Tuple[float, Dict[str, float]]:
         """
@@ -1005,8 +1057,10 @@ class QuadcopterEnv(gym.Env):
         """
         valid_samples = samples
 
-        keys = ["pos_xy2", "pos_z2", "vel_xy2", "vel_z2",
-                "att2", "omega2",
+        keys = ["pos_xy2", "pos_z2", 
+                "vel_xy2", "vel_z2",
+                "att2", 
+                "omega2",
                 "u2", "dv2", "domega2", "du2",
                 "sat_hit", "over_hit"]
         S = {k: np.array([e[k] for e in valid_samples], dtype=float) for k in keys}
@@ -1027,16 +1081,17 @@ class QuadcopterEnv(gym.Env):
 
         saturation_hits = float(np.sum(S["sat_hit"]))
         saturation_hits_norm = saturation_hits / 100.0
+
         overshoot_hits = float(np.sum(S["over_hit"]))
         overshoot_hits_norm = overshoot_hits / 100.0
 
-        #  修复：震荡模式检测（改进算法）
+        #  震荡模式检测（改进算法）
         oscillation_penalty = 0.0
         if self.enable_oscillation_penalty and len(valid_samples) >= 3:
             vel_err_xy_list = [s.get("vel_err_xy", 0.0) for s in valid_samples]
             vel_err_z_list = [s.get("vel_err_z", 0.0) for s in valid_samples]
             
-            # 方法1：检测符号变化次数（震荡指标）
+            # 检测符号变化次数（震荡指标）
             vel_xy_sign_changes = sum(
                 1 for i in range(1, len(vel_err_xy_list))
                 if vel_err_xy_list[i] * vel_err_xy_list[i-1] < 0
@@ -1046,7 +1101,7 @@ class QuadcopterEnv(gym.Env):
                 if vel_err_z_list[i] * vel_err_z_list[i-1] < 0
             )
             
-            # 方法2：检测标准差（震荡幅度）
+            # 检测标准差（震荡幅度）
             vel_err_xy_std = float(np.std(vel_err_xy_list))
             vel_err_z_std = float(np.std(vel_err_z_list))
             
@@ -1058,45 +1113,68 @@ class QuadcopterEnv(gym.Env):
             if oscillation_ratio > 0.5 and oscillation_amplitude > 0.3:
                 oscillation_penalty = 0.3 * oscillation_ratio + 0.2 * min(oscillation_amplitude, 2.0)
 
-
-        #  改进：速度跟踪分档奖励
-        vel_error_total = rmse_vel_xy + rmse_vel_z  # 总误差
+        # #  改进：速度跟踪分档奖励
+        # vel_error_total = rmse_vel_xy + rmse_vel_z  # 总误差
         
-        if vel_error_total < self.vel_tracking_excellent_threshold:  # <1m/s
-            # 精确跟踪：大额正奖励
-            vel_bonus = self.vel_reward_excellent_bonus * (1.0 - vel_error_total / self.vel_tracking_excellent_threshold)
-        elif vel_error_total > self.vel_tracking_poor_threshold:    # >3m/s
-            # 极差跟踪：额外惩罚
-            vel_bonus = -self.vel_reward_poor_penalty * (vel_error_total / self.vel_tracking_poor_threshold - 1.0)
-        else:
-            # 中间状态：无额外奖励
-            vel_bonus = 0.0
+        # if vel_error_total < self.vel_tracking_excellent_threshold:  # <0.1m/s
+        #     # 精确跟踪：惩罚为0
+        #     vel_bonus = self.vel_reward_excellent_bonus * (1.0 - vel_error_total / self.vel_tracking_excellent_threshold)
+        # elif vel_error_total > self.vel_tracking_poor_threshold:    # >1m/s
+        #     # 极差跟踪：额外惩罚                                        
+        #     vel_bonus = -self.vel_reward_poor_penalty * (vel_error_total / self.vel_tracking_poor_threshold - 1.0)
+        # else:                                               # 0.1 < vel_error_total <1m/s
+        #     # 中间状态：小额惩罚
+        #     vel_bonus = 0.0
 
         #  奖励函数（优化后的权重）
         sw = self.segment_weights
 
-        segment_reward = -(
-            # 跟踪误差项（速度主导）
-            sw["W_pos_xy"] * rmse_pos_xy +
-            sw["W_pos_z"] * rmse_pos_z +
-            sw["W_vel_xy"] * rmse_vel_xy +      #  3.0（核心）
-            sw["W_vel_z"] * rmse_vel_z +        #  2.0（核心）
+        reward_pos_xy = sw["W_pos_xy"] * rmse_pos_xy
+        reward_pos_z = sw["W_pos_z"] * rmse_pos_z
+        reward_vel_xy = sw["W_vel_xy"] * rmse_vel_xy
+        reward_vel_z = sw["W_vel_z"] * rmse_vel_z
+        reward_att = sw["W_att"] * rmse_att              
+        reward_omega = sw["W_omega"] * rms_omega
+        reward_u = sw["W_u"] * mean_control_effort
+        reward_dv = sw["W_dv"] * rms_dv
+        reward_domega = sw["W_domega"] * rms_domega
+        reward_du = sw["W_du"] * rms_du
+        reward_sat = sw["W_sat"] * saturation_hits_norm
+        reward_over = sw["W_over"] * overshoot_hits_norm
+        reward_oscillation_penalty = oscillation_penalty
+        # reward_vel_bonus = vel_bonus
 
-            sw["W_att"] * rmse_att +            #  0.8（提升）
-            sw["W_omega"] * rms_omega +
-            # 控制平滑项
-            sw["W_u"] * mean_control_effort +
-            sw["W_dv"] * rms_dv +               #  0.1（加强）
-            sw["W_domega"] * rms_domega +
-            sw["W_du"] * rms_du +               #  0.5（关键）
-            
-            # 约束惩罚
-            sw["W_sat"] * saturation_hits_norm +
-            sw["W_over"] * overshoot_hits_norm +
-            
-            #  新增：震荡惩罚
-            oscillation_penalty
-        ) + vel_bonus  #  加上分档奖励
+        segment_reward = - (reward_pos_xy +
+                            reward_pos_z +
+                            reward_vel_xy +
+                            reward_vel_z +
+                            reward_att +
+                            reward_omega +
+                            reward_u +
+                            reward_dv +
+                            reward_domega +
+                            reward_du +
+                            reward_sat +
+                            reward_over +
+                            reward_oscillation_penalty)
+                            # reward_oscillation_penalty) + reward_vel_bonus
+
+        reward_for_debug = {
+            "reward_pos_xy": reward_pos_xy,
+            "reward_pos_z": reward_pos_z,
+            "reward_vel_xy": reward_vel_xy,
+            "reward_vel_z": reward_vel_z,
+            "reward_att": reward_att,
+            "reward_omega": reward_omega,
+            "reward_u": reward_u,
+            "reward_dv": reward_dv,
+            "reward_domega": reward_domega,
+            "reward_du": reward_du,
+            "reward_sat": reward_sat,
+            "reward_over": reward_over,
+            "reward_oscillation_penalty": reward_oscillation_penalty,
+            # "reward_vel_bonus": reward_vel_bonus,
+        }
 
         metrics = {
             'segment_duration': float(len(valid_samples) * self.dt),
@@ -1117,19 +1195,83 @@ class QuadcopterEnv(gym.Env):
             'segment_reward': float(segment_reward),
             'samples': int(len(valid_samples)),
             
-            #  新增：诊断信息
+            #  诊断信息
             'total_samples': int(len(samples)),
             'oscillation_penalty': float(oscillation_penalty),
         }
 
-        return float(segment_reward), metrics
+        return float(segment_reward), reward_for_debug, metrics
 
+    # =========================
+    #  观测函数
+    # =========================
+    def _get_observation(self, sDesCalc: np.ndarray) -> np.ndarray:
+        """
+        构建观测向量（56维）
+        """
+        # 参考状态
+        pos_ref = sDesCalc[0:3]
+        vel_ref = sDesCalc[3:6]
+        eul_ref = _quaternion_to_euler(sDesCalc[9:13])
+        omega_ref = sDesCalc[13:16]
+
+        # 反馈状态
+        pos_fb = self.quad.pos
+        vel_fb = self.quad.vel
+        eul_fb = self.quad.euler
+        omega_fb = self.quad.omega
+
+        # 误差信号（核心特征）
+        pos_err = pos_ref - pos_fb
+        vel_err = vel_ref - vel_fb
+        eul_err = eul_ref - eul_fb
+        eul_err = np.arctan2(np.sin(eul_err), np.cos(eul_err))  # 将欧拉角误差包裹到 [-pi, pi]
+        omega_err = omega_ref - omega_fb
+        # log.warning(f"Obs Extraction: pos_err={pos_err}, vel_err={vel_err}, eul_err={eul_err}, omega_err={omega_err}")
+        
+        # 误差归一化
+        pos_err_norm = np.clip(pos_err / 10.0, -1, 1)      # 位置误差 /10m
+        vel_err_norm = np.clip(vel_err / 15.0, -1, 1)      # 速度误差 /15m/s
+        eul_err_norm = np.clip(eul_err / np.pi, -1, 1)     # 角度误差 /π
+        omega_err_norm = np.clip(omega_err / 2*np.pi, -1, 1)  # 角速度误差 /2π
+        
+        # 去除误差变化率相关特征与缓存        
+        if hasattr(self, 'pid_K_prev_vec') and self.pid_K_prev_vec is not None:
+            pid_normalized = 2.0 * (self.pid_K_prev_vec - self.pid_safe_min) / (self.pid_safe_max - self.pid_safe_min + 1e-8) - 1.0
+            pid_normalized = np.clip(pid_normalized, -1.0, 1.0)
+        else:
+            pid_normalized = np.zeros(20, dtype=np.float32)
+                
+        # 参考状态和反馈状态归一化
+        pos_ref_norm = np.clip(pos_ref / 10.0, -1, 1)
+        vel_ref_norm = np.clip(vel_ref / 15.0, -1, 1)
+        eul_ref_norm = np.clip(eul_ref / np.pi, -1, 1)
+        omega_ref_norm = np.clip(omega_ref / 2*np.pi, -1, 1)
+        
+        pos_fb_norm = np.clip(pos_fb / 10.0, -1, 1)
+        vel_fb_norm = np.clip(vel_fb / 15.0, -1, 1)
+        eul_fb_norm = np.clip(eul_fb / np.pi, -1, 1)
+        omega_fb_norm = np.clip(omega_fb / 2*np.pi, -1, 1)
+        
+        # 拼接观测向量（56维，全部已归一化）
+        obs = np.concatenate([
+            # 参考状态 (12)
+            pos_ref_norm, vel_ref_norm, eul_ref_norm, omega_ref_norm,
+            # 反馈状态 (12)
+            pos_fb_norm, vel_fb_norm, eul_fb_norm, omega_fb_norm,
+            # 误差信号 (12)
+            pos_err_norm, vel_err_norm, eul_err_norm, omega_err_norm,
+            # PID参数归一化 (20)
+            pid_normalized
+        ])  
+
+        return obs.astype(np.float32)
+    
     # =========================
     # 终止与信息
     # =========================
     def _is_out_of_bounds(self) -> bool:
-        """ 改进：使用动态姿态阈值"""
-        # 使用动态阈值代替固定的 np.pi/2
+        """ 改进：使用动态姿态阈值[90~60]，根据epoch线性调整"""
         if (np.abs(self.quad.euler[0]) > self.attitude_bound_current or 
             np.abs(self.quad.euler[1]) > self.attitude_bound_current):
             return True

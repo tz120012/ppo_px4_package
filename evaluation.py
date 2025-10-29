@@ -119,9 +119,11 @@ while not done:
 print(f"🎯 Total reward: {total_reward:.2f}")
 
 # ==== 5️⃣ 保存渲染图与完整分析图（.svg） ====
-out_dir = "./log_eval_results"
+# 输出目录+trajectory_type
+from datetime import datetime
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+out_dir = f"./logs/log_eval_results/{env.trajectory_type}/{timestamp}/"
 os.makedirs(out_dir, exist_ok=True)
-
 # 保存 render 窗口（全程曲线）
 if hasattr(env, "_render_fig"):
     render_svg = os.path.join(out_dir, "render_full.svg")

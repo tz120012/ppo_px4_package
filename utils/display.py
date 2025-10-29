@@ -94,7 +94,7 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
         thetaDes[ii] = YPR[1]*rad2deg
         phiDes[ii]   = YPR[2]*rad2deg
     
-    plt.show()
+    # plt.show()
 
     plt.figure()
     plt.plot(time, x, time, y, time, z)
@@ -103,7 +103,7 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
     plt.legend(['x','y','z','x_sp','y_sp','z_sp'])
     plt.xlabel('Time (s)')
     plt.ylabel('Position (m)')
-    plt.draw()
+    # plt.draw()
 
     plt.figure()
     plt.plot(time, xdot, time, ydot, time, zdot)
@@ -122,7 +122,7 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
     plt.legend(['x_thr_sp','y_thr_sp','z_thr_sp'])
     plt.xlabel('Time (s)')
     plt.ylabel('Desired Thrust (N)')
-    plt.draw()
+    # plt.draw()
 
     plt.figure()
     plt.plot(time, phi, time, theta, time, psi)
@@ -154,7 +154,7 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
     plt.legend(['w1','w2','w3','w4'])
     plt.xlabel('Time (s)')
     plt.ylabel('Motor Angular Velocity (RPM)')
-    plt.draw()
+    # plt.draw()
 
     plt.figure()
     plt.subplot(2,1,1)
@@ -163,7 +163,7 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
     plt.legend(['thr1','thr2','thr3','thr4'], loc='upper right')
     plt.xlabel('Time (s)')
     plt.ylabel('Rotor Thrust (N)')
-    plt.draw()
+    # plt.draw()
 
     plt.subplot(2,1,2)
     plt.plot(time, torque[:,0], time, torque[:,1], time, torque[:,2], time, torque[:,3])
@@ -171,7 +171,7 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
     plt.legend(['tor1','tor2','tor3','tor4'], loc='upper right')
     plt.xlabel('Time (s)')
     plt.ylabel('Rotor Torque (N*m)')
-    plt.draw()
+    # plt.draw()
 
     plt.figure()
     plt.subplot(3,1,1)
@@ -195,7 +195,7 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
     plt.legend(['Ax','Ay','Az'], loc='upper right')
     plt.xlabel('Time (s)')
     plt.ylabel('Acceleration (m/s^2)')
-    plt.draw()
+    # plt.draw()
 
     plt.figure()
     plt.plot(time, x_err, time, y_err, time, z_err)
@@ -203,4 +203,4 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
     plt.legend(['Pos x error','Pos y error','Pos z error'])
     plt.xlabel('Time (s)')
     plt.ylabel('Position Error (m)')
-    plt.draw()
+    # plt.draw()

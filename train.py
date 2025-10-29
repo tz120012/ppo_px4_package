@@ -79,7 +79,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--gae-lambda", type=float, default=0.97)
     parser.add_argument("--bound-action-method", type=str, default="tanh")  # "clip" or "tanh"
     parser.add_argument("--lr-decay", type=int, default=1)
-    parser.add_argument("--max-grad-norm", type=float, default=0.3)     #梯度裁剪
+    parser.add_argument("--max-grad-norm", type=float, default=0.1)     #梯度裁剪
     parser.add_argument("--eps-clip", type=float, default=0.2)
     parser.add_argument("--dual-clip", type=float, default=None)
     parser.add_argument("--value-clip", type=int, default=1)
@@ -95,7 +95,7 @@ def get_args() -> argparse.Namespace:
                        help="Number of epochs to decay from start to end threshold")
 
     # 日志和保存
-    parser.add_argument("--logdir", type=str, default="log_train")
+    parser.add_argument("--logdir", type=str, default="logs/log_train")
     parser.add_argument("--save-interval", type=int, default=200)       # 每隔100个epoch保存一次checkpoit
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resume-path", type=str, default=None, help="Path to resume training from checkpoint")
@@ -305,6 +305,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
 
     # 设置日志
     now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
+    
     log_name = os.path.join(str(args.seed), now)
     log_path = os.path.join(args.logdir, log_name)
     
