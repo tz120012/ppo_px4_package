@@ -127,7 +127,7 @@ def main():
         vel_all[i,:]         = quad.vel
         quat_all[i,:]        = quad.quat
         omega_all[i,:]       = quad.omega
-        euler_all[i,:]       = quad.euler
+        euler_all[i,:]       = quad.euler   #[R,P,Y]
         sDes_traj_all[i,:]   = traj.sDes
         sDes_calc_all[i,:]   = ctrl.sDesCalc
         w_cmd_all[i,:]       = ctrl.w_cmd
@@ -147,7 +147,6 @@ def main():
     utils.makeFigures(quad.params, t_all, pos_all, vel_all, quat_all, omega_all, euler_all, w_cmd_all, wMotor_all, thr_all, tor_all, sDes_traj_all, sDes_calc_all)
     ani = utils.sameAxisAnimation(t_all, traj.wps, pos_all, quat_all, sDes_traj_all, Ts, quad.params, traj.xyzType, traj.yawType, ifsave)
     # plt.show()
-
 if __name__ == "__main__":
     if (config.orient == "NED" or config.orient == "ENU"):
         main()
