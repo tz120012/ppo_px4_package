@@ -116,8 +116,8 @@ class QuadcopterEnv(gym.Env):
             W_pos_z=pos_weight_z,           # 位置误差Z（速度模式不启用）
             W_vel_xy=vel_weight_xy,         #  速度误差XY：0.15 → 3.0（提升20倍）
             W_vel_z=vel_weight_z,           #  速度误差Z：0.1 → 2.0（提升20倍）
-            W_att=15.0,                      #  姿态误差：0.1 → 0.8（提升8倍）
-            W_omega=1.0,                    # 角速度误差（保持）
+            W_att=75.0,                      #  姿态误差：0.1 → 0.8（提升8倍）
+            W_omega=10.0,                    # 角速度误差（保持）
             
             # 惩罚项
             W_u=0.0,        #0.0                    # 控制能量
@@ -125,10 +125,7 @@ class QuadcopterEnv(gym.Env):
             W_domega=0.0,    #0.02,                 # 角速度变化率
             W_du=0.0,        #1.0,                  # 电机指令平滑
             W_sat=0.0,       #0.5,                  # 饱和惩罚
-            W_over=0.0,      #0.2,                  # 超调惩罚
-
-            #  PID参数变化惩罚
-            W_pid_change=0.0,   #1.0,   
+            W_over=2,      #0.2,                  # 超调惩罚
         )
         # #  速度跟踪成功阈值
         # self.vel_tracking_excellent_threshold = 0.1   # m/s（精确跟踪）
@@ -143,10 +140,10 @@ class QuadcopterEnv(gym.Env):
             w_cmd_max=2e3,
             overshoot_z_tol=0.2,
             normalize_rate_by_dt=True,
-            overshoot_pos_tol=1.0,
-            overshoot_vel_tol=0.5,
-            overshoot_att_tol=5.0,
-            overshoot_ang_vel_tol=30.0,
+            overshoot_pos_tol=0.2,
+            overshoot_vel_tol=0.2,
+            overshoot_att_tol=0.2,
+            overshoot_ang_vel_tol=0.1,
         )
 
         # ==================== 回合跟踪 ====================
@@ -593,25 +590,25 @@ class QuadcopterEnv(gym.Env):
             
             writer.writerow(row_data)
 
-    def _calculate_vel_tracking_bonus_exp(self, rmse_vel_xy, rmse_vel_z):
-        """
-        速度跟踪奖励（指数曲线）
-        rmse越接近0，penalty增长越快
-        rmse: 0.5 → 0.0
-        bonus: 1.0 → 10.0
-        """
-        k = -2.0 * np.log(9.0)  # ≈ -4.394
-        bonus_xy = 10.0 - 9.0 * np.exp(k * rmse_vel_xy)
-        bonus_z = 10.0 - 9.0 * np.exp(k * rmse_vel_z)
-        bonus_xy = np.clip(bonus_xy, 1.0, 10.0)
-        bonus_z = np.clip(bonus_z, 1.0, 10.0)
+    # def _calculate_vel_tracking_bonus_exp(self, rmse_vel_xy, rmse_vel_z):
+    #     """
+    #     速度跟踪奖励（曲线/线性）
+    #     rmse: 0.5 → 0.0
+    #     bonus: -10.0 → 0.0
+    #     """
+    #     # k = -2.0 * np.log(9.0)  # ≈ -4.394
+    #     # bonus_xy = - 9.0 * np.exp(k * rmse_vel_xy)
+    #     # bonus_z = - 9.0 * np.exp(k * rmse_vel_z)
+    #     # bonus_xy = np.clip(bonus_xy, -10.0, 0.0)
+    #     # bonus_z = np.clip(bonus_z, -10.0, 0.0)
 
-        # bonus_xy = np.clip(-20.0 * rmse_vel_xy + 10.0, 1.0, 10.0)
-        # bonus_z = np.clip(-20.0 * rmse_vel_z + 10.0, 1.0, 10.0)
+    #     bonus_xy = np.clip(-20.0 * rmse_vel_xy + 10.0, 0.0, 10.0)
+    #     bonus_z = np.clip(-20.0 * rmse_vel_z + 10.0, 0.0, 10.0)
         
-        bonus_total = (bonus_xy + bonus_z) / 2.0
+    #     bonus_total = (bonus_xy + bonus_z) / 2.0
         
-        return bonus_total
+    #     return bonus_total
+    
     # =========================
     # step() 函数（主循环）
     # =========================
@@ -732,33 +729,35 @@ class QuadcopterEnv(gym.Env):
         # 3.1 基础奖励（基于RMSE误差）
         segment_reward, reward_for_debug, metrics = self._compute_segment_reward_step(step_samples)
                     
-        # 3.3 速度跟踪成功奖励（正向激励）
-        vel_tracking_bonus = 0.0
-        if metrics:
-            rmse_vel_xy = metrics.get("rmse_vel_xy", 999.0)
-            rmse_vel_z = metrics.get("rmse_vel_z", 999.0)
+        # # 3.3 速度跟踪成功奖励（正向激励）
+        # vel_tracking_bonus = 0.0
+        # if metrics:
+        #     rmse_vel_xy = metrics.get("rmse_vel_xy", 999.0)
+        #     rmse_vel_z = metrics.get("rmse_vel_z", 999.0)
         
-            vel_tracking_bonus = self._calculate_vel_tracking_bonus_exp(rmse_vel_xy, rmse_vel_z)
-            #  改进奖励（误差下降），添加上限约束防止震荡
-            vel_improvement_xy = self.prev_rmse_vel_xy - rmse_vel_xy
-            vel_improvement_z = self.prev_rmse_vel_z - rmse_vel_z
+        #     vel_tracking_bonus = self._calculate_vel_tracking_bonus_exp(rmse_vel_xy, rmse_vel_z)
+        #     #  改进奖励（误差下降），添加上限约束防止震荡
+        #     vel_improvement_xy = self.prev_rmse_vel_xy - rmse_vel_xy
+        #     vel_improvement_z = self.prev_rmse_vel_z - rmse_vel_z
             
-            # 只奖励合理范围内的改进
-            if vel_improvement_xy > 0 and vel_improvement_xy < 0.5:  # 单步改进上限0.5m/s
-                vel_tracking_bonus += min(1.0 * vel_improvement_xy, 2.0)  # 总奖励上限2.0
-            if vel_improvement_z > 0 and vel_improvement_z < 0.5:
-                vel_tracking_bonus += min(1.0 * vel_improvement_z, 2.0)
+        #     # 只奖励合理范围内的改进
+        #     if vel_improvement_xy > 0 and vel_improvement_xy < 0.5:  # 单步改进上限0.5m/s
+        #         vel_tracking_bonus += min(1.0 * vel_improvement_xy, 2.0)  # 总奖励上限2.0
+        #     if vel_improvement_z > 0 and vel_improvement_z < 0.5:
+        #         vel_tracking_bonus += min(1.0 * vel_improvement_z, 2.0)
             
-            # 更新历史
-            self.prev_rmse_vel_xy = rmse_vel_xy
-            self.prev_rmse_vel_z = rmse_vel_z
+        #     # 更新历史
+        #     self.prev_rmse_vel_xy = rmse_vel_xy
+        #     self.prev_rmse_vel_z = rmse_vel_z
 
         # 记录调试信息
         reward_for_debug['segment_reward'] = segment_reward
-        reward_for_debug['vel_tracking_bonus'] = vel_tracking_bonus  
+        # reward_for_debug['vel_tracking_bonus'] = vel_tracking_bonus  
 
         # 3.4 合成总奖励（缩放前）
-        reward_before_scale = segment_reward + vel_tracking_bonus
+        # reward_before_scale = segment_reward + vel_tracking_bonus
+        reward_before_scale = segment_reward
+
         reward_for_debug['reward_total_before_scale'] = reward_before_scale
 
         # 记录到CSV文件
@@ -879,13 +878,14 @@ class QuadcopterEnv(gym.Env):
         vel_err_z = vel_err_vec[2]
         vel_err_xy = float(np.linalg.norm(vel_err_vec[:2]))
 
-        att_err_vec = eul_ref - euler
+        att_err_vec = eul_ref - euler               # [yaw, pitch, roll]
         att_err_vec = np.array([angle_wrap(att_err_vec[0]),
                                 angle_wrap(att_err_vec[1]),
                                 angle_wrap(att_err_vec[2])], dtype=float)
-        att_err_roll = float(att_err_vec[0])
+        
+        att_err_yaw = float(att_err_vec[0])
         att_err_pitch = float(att_err_vec[1])
-        att_err_yaw = float(att_err_vec[2])
+        att_err_roll = float(att_err_vec[2])
         att_norm = float(np.linalg.norm(att_err_vec))
 
         omega_err_vec = omega_ref - omega
@@ -905,9 +905,9 @@ class QuadcopterEnv(gym.Env):
             "vel_err_z": vel_err_z,
             "vel_err_xy": vel_err_xy,
 
+            "att_err_yaw": att_err_yaw,
             "att_err_roll": abs(att_err_roll),
             "att_err_pitch": abs(att_err_pitch),
-            "att_err_yaw": att_err_yaw,
             "att_norm": att_norm,
 
             "omega_err_p": omega_err_p,
@@ -916,6 +916,60 @@ class QuadcopterEnv(gym.Env):
             "omega_norm": omega_norm,
 
         }
+
+    def _detect_overshoot(self, error):
+        # 初始化超调检测结果
+        overshoot_results = {
+            "vel": [0, 0, 0],     # 三轴速度超调结果
+            "att": [0, 0, 0],     # 三轴姿态超调结果
+            "ang_vel": [0, 0, 0]  # 三轴角速度超调结果
+        }
+        
+        # 定义对应的容忍度 
+        vel_tol = self.limits["overshoot_vel_tol"]
+        att_tol = self.limits["overshoot_att_tol"]
+        ang_vel_tol = self.limits["overshoot_ang_vel_tol"]
+
+        # 把需要用到的误差根据通道分类
+        vel_err = [error["vel_err_x"], error["vel_err_y"], error["vel_err_z"]]
+        att_err = [error["att_err_yaw"], error["att_err_pitch"], error["att_err_roll"]]
+        ang_vel_err = [error["omega_err_p"], error["omega_err_q"], error["omega_err_r"]]
+
+        # 记录是否发生超调
+        overthrow_detected = False
+
+        # 检测超调：三轴速度
+        for i in range(3):  # 0: X, 1: Y, 2: Z
+            current_vel = float(self.quad.vel[i])
+            # 修正：直接相乘判断符号，避免 np.sign(0) = 0 的问题
+            if vel_err[i] * current_vel < 0 and abs(vel_err[i]) > vel_tol:
+                overshoot_results['vel'][i] = vel_err[i]
+                overthrow_detected = True
+
+        # 检测超调：三轴姿态
+        # 假设 self.quad.euler 顺序是 [yaw, pitch, roll]
+        for i in range(3):  # 0: yaw, 1: Pitch, 2: Roll
+            current_att = float(self.quad.euler[i])
+            if att_err[i] * current_att < 0 and abs(att_err[i]) > att_tol:
+                overshoot_results['att'][i] = att_err[i]
+                overthrow_detected = True
+
+        # 检测超调：三轴角速度
+        for i in range(3):  # 0: p, 1: q, 2: r
+            current_ang_vel = float(self.quad.omega[i])
+            if ang_vel_err[i] * current_ang_vel < 0 and abs(ang_vel_err[i]) > ang_vel_tol:
+                overshoot_results['ang_vel'][i] = ang_vel_err[i]
+                overthrow_detected = True
+        
+        if isinstance(overshoot_results, dict):
+            overshoot_hits_sum = sum(
+                sum(1.0 for v in overshoot_results.get(key, []) if v != 0)
+                for key in ['vel', 'att', 'ang_vel']
+            )
+        else:
+            overshoot_hits_sum = 0.0
+
+        return overshoot_hits_sum if overthrow_detected else 0
 
     def _collect_step_sample(self, m: Dict[str, Any], prev_cache: Dict[str, Any]) -> Dict[str, float]:
         """
@@ -989,54 +1043,65 @@ class QuadcopterEnv(gym.Env):
         }
         return entry
 
-    def _detect_overshoot(self, error):
-        # 初始化超调检测结果
-        overshoot_results = {
-            "vel": [0, 0, 0],     # 三轴速度超调结果
-            "att": [0, 0, 0],     # 三轴姿态超调结果
-            "ang_vel": [0, 0, 0]  # 三轴角速度超调结果
-        }
+    # def _detect_overshoot(self, error):
+    #     # 初始化超调检测结果
+    #     overshoot_results = {
+    #         "vel": [0, 0, 0],     # 三轴速度超调结果
+    #         "att": [0, 0, 0],     # 三轴姿态超调结果
+    #         "ang_vel": [0, 0, 0]  # 三轴角速度超调结果
+    #     }
         
-        # 定义对应的容忍度 
-        vel_tol = self.limits["overshoot_vel_tol"]
-        att_tol = self.limits["overshoot_att_tol"]
-        ang_vel_tol = self.limits["overshoot_ang_vel_tol"]
+    #     # 定义对应的容忍度 
+    #     vel_tol = self.limits["overshoot_vel_tol"]
+    #     att_tol = self.limits["overshoot_att_tol"]
+    #     ang_vel_tol = self.limits["overshoot_ang_vel_tol"]
 
-        # 把需要用到的误差根据通道分类
-        pos_err = [error["pos_err_x"], error["pos_err_y"], error["pos_err_z"]]
-        vel_err = [error["vel_err_x"], error["vel_err_y"], error["vel_err_z"]]
-        att_err = [error["att_err_roll"], error["att_err_pitch"], error["att_err_yaw"]]
-        ang_vel_err = [error["omega_err_p"], error["omega_err_q"], error["omega_err_r"]]
+    #     # 把需要用到的误差根据通道分类
+    #     pos_err = [error["pos_err_x"], error["pos_err_y"], error["pos_err_z"]]
+    #     vel_err = [error["vel_err_x"], error["vel_err_y"], error["vel_err_z"]]
+    #     att_err = [error["att_err_roll"], error["att_err_pitch"], error["att_err_yaw"]]
+    #     ang_vel_err = [error["omega_err_p"], error["omega_err_q"], error["omega_err_r"]]
 
-        # 记录是否发生超调
-        overthrow_detected = False
+    #     # 记录是否发生超调
+    #     vel_overthrow_detected = False
+    #     att_overthrow_detected = False
+    #     ang_vel_overthrow_detected = False
+    #     overthrow_detected = False
 
-        # 检测超调：三轴速度
-        for i in range(3):  # 0: X, 1: Y, 2: Z
-            current_vel_err = vel_err[i]  # 从分类后的 vel_err 提取误差
-            current_vz = float(self.quad.vel[i])
-            if current_vel_err * np.sign(current_vz) < 0 and abs(current_vel_err) > vel_tol:
-                overshoot_results['vel'][i] = 1
-                overthrow_detected = True  # 检测到超调
+    #     # 检测超调：三轴速度
+    #     for i in range(3):  # 0: X, 1: Y, 2: Z
+    #         current_vel_err = vel_err[i]  # 从分类后的 vel_err 提取误差
+    #         current_vel = float(self.quad.vel[i])
+    #         if current_vel_err * np.sign(current_vel) < 0 and abs(current_vel_err) > vel_tol:
+    #             overshoot_results['vel'][i] = vel_err[i]
+    #             vel_overthrow_detected = True  # 检测到超调
 
-        # 检测超调：三轴姿态
-        for i in range(3):  # 0: Roll, 1: Pitch, 2: Yaw
-            current_att_err = att_err[i]  # 从分类后的 att_err 提取误差
-            current_ang_att = float(self.quad.euler[i]) #self.quad.euler : yaw,pitch,roll
-            if current_att_err * np.sign(current_ang_att) < 0 and abs(current_att_err) > att_tol:
-                overshoot_results['att'][i] = 1
-                overthrow_detected = True  # 检测到超调
+    #     # 检测超调：三轴姿态
+    #     for i in range(3):  # 0: Roll, 1: Pitch, 2: Yaw
+    #         current_att_err = att_err[i]  # 从分类后的 att_err 提取误差
+    #         current_ang_att = float(self.quad.euler[i]) #self.quad.euler : yaw,pitch,roll
+    #         if current_att_err * np.sign(current_ang_att) < 0 and abs(current_att_err) > att_tol:
+    #             overshoot_results['att'][i] = att_err[i]
+    #             att_overthrow_detected = True  # 检测到超调
 
-        # 检测超调：三轴角速度
-        for i in range(3):  # 0: Roll rate, 1: Pitch rate, 2: Yaw rate
-            current_ang_vel_err = ang_vel_err[i]  # 从分类后的 ang_vel_err 提取误差
-            current_vz = float(self.quad.omega[i])
-            if current_ang_vel_err * np.sign(current_vz) < 0 and abs(current_ang_vel_err) > ang_vel_tol:
-                overshoot_results['ang_vel'][i] = 1
-                overthrow_detected = True  # 检测到超调
+    #     # 检测超调：三轴角速度
+    #     for i in range(3):  # 0: Roll rate, 1: Pitch rate, 2: Yaw rate
+    #         current_ang_vel_err = ang_vel_err[i]  # 从分类后的 ang_vel_err 提取误差
+    #         current_vz = float(self.quad.omega[i])
+    #         if current_ang_vel_err * np.sign(current_vz) < 0 and abs(current_ang_vel_err) > ang_vel_tol:
+    #             overshoot_results['ang_vel'][i] = ang_vel_err[i]
+    #             ang_vel_overthrow_detected = True  # 检测到超调
 
-        # 返回结果可以选择仅返回是否发生超调或详细结果
-        return 1 if overthrow_detected else 0
+    #     overthrow_detected = vel_overthrow_detected or att_overthrow_detected or ang_vel_overthrow_detected
+
+    #     if overthrow_detected:
+    #         log.debug(f" Overshoot detected: {overshoot_results}")
+    #         return overshoot_results
+    #     else:
+    #         return 0  # 未检测到超调
+
+
+
 
     def _compute_segment_reward_step(self, samples: List[Dict[str, float]]) -> Tuple[float, Dict[str, float]]:
         """
@@ -1066,10 +1131,10 @@ class QuadcopterEnv(gym.Env):
         rms_du = float(np.sqrt(np.mean(S["du2"])))
 
         saturation_hits = float(np.sum(S["sat_hit"]))
-        saturation_hits_norm = saturation_hits / 100.0
+        saturation_hits_norm = saturation_hits / (self.rl_dt/self.dt)  # 归一化
 
-        overshoot_hits = float(np.sum(S["over_hit"]))
-        overshoot_hits_norm = overshoot_hits / 100.0
+        overshoot_hits = float(np.mean(S["over_hit"]))
+        overshoot_hits_norm = overshoot_hits / (self.rl_dt/self.dt)  # 归一化
 
         #  震荡模式检测（改进算法）
         oscillation_penalty = 0.0
