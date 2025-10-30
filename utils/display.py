@@ -24,7 +24,7 @@ def fullprint(*args, **kwargs):
     np.set_printoptions(opt)
 
 
-def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, commands, wMotor_all, thrust, torque, sDes_traj, sDes_calc):
+def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, commands, wMotor_all, thrust, torque, sDes_traj, sDes_calc,trajSelect):
     x    = pos_all[:,0]
     y    = pos_all[:,1]
     z    = pos_all[:,2]
@@ -93,7 +93,50 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
         psiDes[ii]   = YPR[0]*rad2deg
         thetaDes[ii] = YPR[1]*rad2deg
         phiDes[ii]   = YPR[2]*rad2deg
-    
+
+    ###################################################################
+    import os
+    from datetime import datetime
+    # 将t_all、pos_all、vel_all、euler_all、omega_all和sDes_calc_all保存在一个.csv文件，方便后续处理，保存目录为./logs/baseline_pid_results，文件名为datatime_baseline_pid.csv
+    # Save results to CSV
+    # self.sDesCalc[0:3] = self.pos_sp
+    # self.sDesCalc[3:6] = self.vel_sp
+    # self.sDesCalc[6:9] = self.thrust_sp
+    # self.sDesCalc[9:13] = self.qd
+    # self.sDesCalc[13:16] = self.rate_sp
+    # ---------------------------
+    # Create logs directory if it doesn't exist
+    traj_str = str(int(trajSelect))
+    log_dir = f'./logs/baseline_pid_results/{traj_str}/'
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Generate filename with timestamp
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f'{timestamp}_baseline_pid.csv'
+    filepath = os.path.join(log_dir, filename)
+
+    # Combine all data into a single array
+    data_to_save = np.column_stack([
+        time,
+        x,y,z,
+        xdot,ydot,zdot,
+        phi,theta,psi,
+        p,q,r,
+        x_sp,y_sp,z_sp,
+        Vx_sp,Vy_sp,Vz_sp,
+        phiDes,thetaDes,psiDes,
+        pDes,qDes,rDes,
+    ])
+
+    # Create header
+    header = 'time,pos_x,pos_y,pos_z,vel_x,vel_y,vel_z,euler_roll,euler_pitch,euler_yaw,omega_x,omega_y,omega_z,'
+    header += 'pos_x_sp,pos_y_sp,pos_z_sp,vel_x_sp,vel_y_sp,vel_z_sp,euler_roll_sp,euler_pitch_sp,euler_yaw_sp,omega_x_sp,omega_y_sp,omega_z_sp,'
+
+    # Save to CSV
+    np.savetxt(filepath, data_to_save, delimiter=',', header=header, comments='')
+    print(f"Results saved to: {filepath}")
+    ###################################################################
+
     # plt.show()
 
     plt.figure()
@@ -103,7 +146,8 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
     plt.legend(['x','y','z','x_sp','y_sp','z_sp'])
     plt.xlabel('Time (s)')
     plt.ylabel('Position (m)')
-    # plt.draw()
+    plt.draw()
+    plt.savefig(os.path.join(log_dir, f'{timestamp}_position.svg'), dpi=300, bbox_inches='tight')
 
     plt.figure()
     plt.plot(time, xdot, time, ydot, time, zdot)
@@ -114,7 +158,7 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
     plt.ylabel('Velocity (m/s)')
     plt.draw()
     # 保存图像
-    plt.savefig('velocity_plot.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(log_dir, f'{timestamp}_velocity.svg'), dpi=300, bbox_inches='tight')
 
     plt.figure()
     plt.plot(time, x_thr_sp, time, y_thr_sp, time, z_thr_sp)
@@ -134,7 +178,7 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
     plt.ylabel('Euler Angle (°)')
     plt.draw()
     # 保存图像
-    plt.savefig('attitude_plot.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(log_dir, f'{timestamp}_attitude.svg'), dpi=300, bbox_inches='tight')
 
     plt.figure()
     plt.plot(time, p, time, q, time, r)
@@ -145,7 +189,7 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
     plt.ylabel('Angular Velocity (°/s)')
     plt.draw()
     # 保存图像
-    plt.savefig('angular_velocity_plot.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(log_dir, f'{timestamp}_angular_velocity.svg'), dpi=300, bbox_inches='tight')
 
     plt.figure()
     plt.plot(time, wM1, time, wM2, time, wM3, time, wM4)

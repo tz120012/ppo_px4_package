@@ -201,14 +201,15 @@ class QuadcopterEnv(gym.Env):
         # ==================== 基线PID参数（初始化为中值，并应用到ctrl） ====================
         self.pid_K_prev_vec = np.array([
             1.0, 0.8,                   # pos_P_gains: Pxy, Pz
-            7, 8.5,                   # vel_P_gains: Pxydot, Pzdot
+            6.5, 8.5,                   # vel_P_gains: Pxydot, Pzdot
             10.0, 1.6,                  # vel_I_gains: Ixydot, Izdot
-            0.3, 1.0,                  # vel_D_gains: Dxydot, Dzdot
+            0.01, 1.0,                  # vel_D_gains: Dxydot, Dzdot
             8.0, 8.0, 2.75,             # att_P_gains: Pphi, Ptheta, Ppsi
             0.5, 0.5, 0.305,            # rate_P_gains: Pp, Pq, Pr
             3.0, 3.0, 5.0,              # rate_I_gains: Ip, Iq, Ir
             0.008, 0.008, 0.005         # rate_D_gains: Dp, Dq, Dr
         ],dtype=np.float32)
+
         self.init_actions = self.normalize_pid_parameters(self.pid_K_prev_vec)
         self.prev_action = self.init_actions
         self._apply_pid_parameters(self.init_actions)

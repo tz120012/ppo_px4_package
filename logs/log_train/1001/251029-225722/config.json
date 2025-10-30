@@ -1,0 +1,53 @@
+{
+    "control_type": "xyz_vel",
+    "trajectory_type": 1001,
+    "yaw_type": 3,
+    "max_episode_steps": 1500,
+    "rl_dt": 0.02,
+    "sim_dt": 0.005,
+    "wind_type": "None",
+    "wind_strength": 0.0,
+    "seed": 1001,
+    "buffer_size": 8192,
+    "hidden_sizes": [
+        256,
+        256
+    ],
+    "lr": 1e-05,
+    "gamma": 0.95,
+    "epoch": 5000,
+    "step_per_epoch": 1500,
+    "step_per_collect": 1024,
+    "repeat_per_collect": 6,
+    "batch_size": 512,
+    "training_num": 16,
+    "test_num": 8,
+    "rew_norm": 1,
+    "vf_coef": 0.5,
+    "ent_coef": 0.1,
+    "gae_lambda": 0.97,
+    "bound_action_method": "tanh",
+    "lr_decay": 1,
+    "max_grad_norm": 0.1,
+    "eps_clip": 0.2,
+    "dual_clip": null,
+    "value_clip": 1,
+    "norm_adv": 1,
+    "recompute_adv": 1,
+    "attitude_bound_start": 90.0,
+    "attitude_bound_end": 60.0,
+    "attitude_bound_decay_epochs": 1000,
+    "logdir": "logs/log_train",
+    "save_interval": 200,
+    "device": "cuda",
+    "resume_path": null,
+    "logger": "tensorboard",
+    "state_shape": [
+        56
+    ],
+    "action_shape": [
+        20
+    ],
+    "max_action": 1.0,
+    "min_action": -1.0
+}

@@ -63,7 +63,7 @@ class Quadcopter:
 
         # Euler angles of current state
         YPR = utils.quatToYPR_ZYX(self.quat)
-        self.euler = YPR[::-1] # flip YPR so that euler state = phi, theta, psi
+        self.euler = YPR[::-1] # flip YPR so that euler state = phi, theta, psi 将YPR转换成RPY
         self.psi   = YPR[0]
         self.theta = YPR[1]
         self.phi   = YPR[2]
