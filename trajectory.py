@@ -153,7 +153,8 @@ class Trajectory:
             self.vel_step_duration = 5.0
             self.vel_zero_duration = 5.0
             self.vel_cycle_time = 10.0
-            self.vel_levels = [2.0, 5.0, 10.0]
+            # self.vel_levels = [2.0, 5.0, 10.0]
+            self.vel_levels = [5.0, 5.0, 5.0]
             self.num_steps = len(self.vel_levels)
             self.roll_pitch_ratio = 0.6
             self.current_step = 0

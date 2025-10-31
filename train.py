@@ -50,25 +50,24 @@ def get_args() -> argparse.Namespace:
     # 环境参数
     parser.add_argument("--control-type", type=str, default="xyz_vel", 
                        choices=["xyz_pos", "xy_vel_z_pos", "xyz_vel"])
-    parser.add_argument("--trajectory-type", type=int, default=1002)
+    parser.add_argument("--trajectory-type", type=int, default=1001)
     parser.add_argument("--yaw-type", type=int, default=3)
-    parser.add_argument("--max-episode-steps", type=int, default=1500)
-    parser.add_argument("--rl-dt", type=float, default=0.02)
+    parser.add_argument("--max-episode-steps", type=int, default=6000)
     parser.add_argument("--sim-dt", type=float, default=0.005)
     parser.add_argument("--wind-type", type=str, default="None")
     parser.add_argument("--wind-strength", type=float, default=0.0)
 
     # 训练参数
-    parser.add_argument("--seed", type=int, default=1002)
+    parser.add_argument("--seed", type=int, default=1001)
     parser.add_argument("--buffer-size", type=int, default=4096)
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])
-    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--epoch", type=int, default=5000)
-    parser.add_argument("--step-per-epoch", type=int, default=1500)
-    parser.add_argument("--step-per-collect", type=int, default=1024)
+    parser.add_argument("--epoch", type=int, default=1000)
+    parser.add_argument("--step-per-epoch", type=int, default=30000)
+    parser.add_argument("--step-per-collect", type=int, default=2048)
     parser.add_argument("--repeat-per-collect", type=int, default=6)
-    parser.add_argument("--batch-size", type=int, default=512)
+    parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--training-num", type=int, default=16)
     parser.add_argument("--test-num", type=int, default=8)
     
@@ -109,7 +108,6 @@ def make_px4_env(
     trajectory_type: int,
     yaw_type: int,
     max_episode_steps: int,
-    rl_dt: float,
     sim_dt: float,
     wind_type: str,
     wind_strength: float,
@@ -130,7 +128,6 @@ def make_px4_env(
                 yaw_type=yaw_type,
                 max_episode_steps=max_episode_steps,
                 dt=sim_dt,
-                rl_dt=rl_dt,
                 wind_type=wind_type,
                 wind_strength=wind_strength,
 
@@ -174,7 +171,6 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         trajectory_type=args.trajectory_type,
         yaw_type=args.yaw_type,
         max_episode_steps=args.max_episode_steps,
-        rl_dt=args.rl_dt,
         sim_dt=args.sim_dt,
         wind_type=args.wind_type,
         wind_strength=args.wind_strength,

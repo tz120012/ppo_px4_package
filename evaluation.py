@@ -37,7 +37,6 @@ env = QuadcopterEnv(
     trajectory_type=args.get("trajectory_type", 1002),
     yaw_type=args.get("yaw_type", 3),
     dt=args.get("sim_dt", args.get("dt", 0.005)),
-    rl_dt=args.get("rl_dt", 0.02),
     max_episode_steps=args.get("max_episode_steps", 1500),
     wind_type=args.get("wind_type", "none"),
     wind_strength=args.get("wind_strength", 0.0),
