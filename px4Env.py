@@ -174,18 +174,18 @@ class QuadcopterEnv(gym.Env):
         self._initialize_simulation()
 
         # ==================== 基线PID参数 ====================
-        self.pid_K_prev_vec = np.array([
-            1.0, 0.8,
-            6.5, 8.5,
-            10.0, 1.6,
-            0.01, 1.0,
-            8.0, 8.0, 2.75,
-            0.5, 0.5, 0.305,
-            3.0, 3.0, 5.0,
-            0.008, 0.008, 0.005
-        ],dtype=np.float32)
+        # self.pid_K_prev_vec = np.array([
+        #     1.0, 0.8,
+        #     6.5, 8.5,
+        #     10.0, 1.6,
+        #     0.01, 1.0,
+        #     8.0, 8.0, 2.75,
+        #     0.5, 0.5, 0.305,
+        #     3.0, 3.0, 5.0,
+        #     0.008, 0.008, 0.005
+        # ],dtype=np.float32)
 
-        # self.pid_K_prev_vec=(self.pid_safe_min + self.pid_safe_max)/2.0  # 使用中间值作为初始值
+        self.pid_K_prev_vec=(self.pid_safe_min + self.pid_safe_max)/2.0  # 使用中间值作为初始值
 
         self.init_actions = self.normalize_pid_parameters(self.pid_K_prev_vec)
         self.prev_action = self.init_actions

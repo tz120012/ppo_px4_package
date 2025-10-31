@@ -72,17 +72,17 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--test-num", type=int, default=8)
     
     # PPO超参数
-    parser.add_argument("--rew-norm", type=int, default=1)
-    parser.add_argument("--vf-coef", type=float, default=0.5)
-    parser.add_argument("--ent-coef", type=float, default=0.001)
-    parser.add_argument("--gae-lambda", type=float, default=0.97)
+    parser.add_argument("--rew-norm", type=int, default=True)
+    parser.add_argument("--vf-coef", type=float, default=0.25)
+    parser.add_argument("--ent-coef", type=float, default=0.0)
+    parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--bound-action-method", type=str, default="tanh")  # "clip" or "tanh"
-    parser.add_argument("--lr-decay", type=int, default=1)
+    parser.add_argument("--lr-decay", type=int, default=True)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)     #梯度裁剪
     parser.add_argument("--eps-clip", type=float, default=0.2)
     parser.add_argument("--dual-clip", type=float, default=None)
-    parser.add_argument("--value-clip", type=int, default=1)
-    parser.add_argument("--norm-adv", type=int, default=1)
+    parser.add_argument("--value-clip", type=int, default=0)
+    parser.add_argument("--norm-adv", type=int, default=0)
     parser.add_argument("--recompute-adv", type=int, default=1)
         
     # ✅ 新增：姿态越界阈值课程学习参数
