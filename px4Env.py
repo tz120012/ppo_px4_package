@@ -72,7 +72,7 @@ class QuadcopterEnv(gym.Env):
         self.ctrlOptions = ["xyz_pos", "xy_vel_z_pos", "xyz_vel"]
 
         # ==================== 动作空间模式（直接式 vs 增量式） ====================
-        self.enable_smooth_transition = True   # train时不用Smooth，测试时用Smooth过渡
+        self.enable_smooth_transition = False   # train时不用Smooth，测试时用Smooth过渡
         self.alpha = 0.1                       # EMA平滑系数（0:无平滑，1:强平滑）
         
         # 奖励缩放因子
@@ -489,7 +489,7 @@ class QuadcopterEnv(gym.Env):
         # ============================================================
         thresh1 = 0.03      # 小误差冻结阈值
         thresh2 = 0.3       # 大误差放开阈值
-        limit_delta = 0.5   # 限幅范围
+        limit_delta = 1.0   # 限幅范围
 
         # ============================================================
         # 通用门控函数（闭包，可访问外部变量）

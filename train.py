@@ -50,7 +50,7 @@ def get_args() -> argparse.Namespace:
     # 环境参数
     parser.add_argument("--control-type", type=str, default="xyz_vel", 
                        choices=["xyz_pos", "xy_vel_z_pos", "xyz_vel"])
-    parser.add_argument("--trajectory-type", type=int, default=1001)
+    parser.add_argument("--trajectory-type", type=int, default=1002)
     parser.add_argument("--yaw-type", type=int, default=3)
     parser.add_argument("--max-episode-steps", type=int, default=1500)
     parser.add_argument("--rl-dt", type=float, default=0.02)
@@ -59,11 +59,11 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--wind-strength", type=float, default=0.0)
 
     # 训练参数
-    parser.add_argument("--seed", type=int, default=1001)
-    parser.add_argument("--buffer-size", type=int, default=8192)
-    parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[256, 256])
+    parser.add_argument("--seed", type=int, default=1002)
+    parser.add_argument("--buffer-size", type=int, default=4096)
+    parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])
     parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--gamma", type=float, default=0.95)
+    parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--epoch", type=int, default=5000)
     parser.add_argument("--step-per-epoch", type=int, default=1500)
     parser.add_argument("--step-per-collect", type=int, default=1024)
@@ -75,11 +75,11 @@ def get_args() -> argparse.Namespace:
     # PPO超参数
     parser.add_argument("--rew-norm", type=int, default=1)
     parser.add_argument("--vf-coef", type=float, default=0.5)
-    parser.add_argument("--ent-coef", type=float, default=0.1)
+    parser.add_argument("--ent-coef", type=float, default=0.001)
     parser.add_argument("--gae-lambda", type=float, default=0.97)
     parser.add_argument("--bound-action-method", type=str, default="tanh")  # "clip" or "tanh"
     parser.add_argument("--lr-decay", type=int, default=1)
-    parser.add_argument("--max-grad-norm", type=float, default=0.1)     #梯度裁剪
+    parser.add_argument("--max-grad-norm", type=float, default=0.5)     #梯度裁剪
     parser.add_argument("--eps-clip", type=float, default=0.2)
     parser.add_argument("--dual-clip", type=float, default=None)
     parser.add_argument("--value-clip", type=int, default=1)
@@ -95,7 +95,7 @@ def get_args() -> argparse.Namespace:
                        help="Number of epochs to decay from start to end threshold")
 
     # 日志和保存
-    parser.add_argument("--logdir", type=str, default="logs/log_train")
+    parser.add_argument("--logdir", type=str, default="logs/log_train_results")
     parser.add_argument("--save-interval", type=int, default=200)       # 每隔100个epoch保存一次checkpoit
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resume-path", type=str, default=None, help="Path to resume training from checkpoint")

@@ -107,12 +107,12 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
     # ---------------------------
     # Create logs directory if it doesn't exist
     traj_str = str(int(trajSelect))
-    log_dir = f'./logs/baseline_pid_results/{traj_str}/'
+    log_dir = f'./logs/adaptive_pid_results/{traj_str}/'
     os.makedirs(log_dir, exist_ok=True)
 
     # Generate filename with timestamp
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f'{timestamp}_baseline_pid.csv'
+    filename = f'{timestamp}_adaptive_pid.csv'
     filepath = os.path.join(log_dir, filename)
 
     # Combine all data into a single array
