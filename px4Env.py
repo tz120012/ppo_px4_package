@@ -73,7 +73,7 @@ class QuadcopterEnv(gym.Env):
         
         # 奖励缩放因子
         self.reward_scale = 0.1
-        self.failure_penalty = -10000.0   
+        self.failure_penalty = -100000.0   
 
         #  子步改进相关参数
         self.compat_truncated_as_done = bool(compat_truncated_as_done)
@@ -92,8 +92,8 @@ class QuadcopterEnv(gym.Env):
         elif self.control_type == "xyz_vel":
             pos_weight_xy = 0.0
             pos_weight_z = 0.0
-            vel_weight_xy = 5.0
-            vel_weight_z = 3.0
+            vel_weight_xy = 10.0
+            vel_weight_z = 6.0
         else:
             log.warning(f" Unknown control_type: {self.control_type}, using default weights")
             pos_weight_xy = 0.0
@@ -106,10 +106,10 @@ class QuadcopterEnv(gym.Env):
             # 跟踪误差项
             W_pos_xy=pos_weight_xy,
             W_pos_z=pos_weight_z,
-            W_vel_xy=vel_weight_xy * 0.7,    # 🔄 降低到原来的 70%
-            W_vel_z=vel_weight_z * 0.7,      # 🔄 降低到原来的 70%
-            W_att=50.0,                       # 🔄 从 75.0 降低到 50.0
-            W_omega=8.0,                      # 🔄 从 10.0 降低到 8.0
+            W_vel_xy=vel_weight_xy ,    
+            W_vel_z=vel_weight_z ,      
+            W_att=50.0,                       
+            W_omega=8.0,                      
             
             # 惩罚项
             W_u=0.0,
@@ -117,19 +117,19 @@ class QuadcopterEnv(gym.Env):
             W_domega=0.0,
             W_du=0.0,
             W_sat=0.0,
-            W_over=2.0,
+            W_over=20.0,
         )
 
         # ==================== 限制与判据 ====================
         self.limits = dict(
             w_cmd_min=0.0,
             w_cmd_max=2e3,
-            overshoot_z_tol=0.2,
+            overshoot_z_tol=0.0,
             normalize_rate_by_dt=True,
-            overshoot_pos_tol=0.2,
-            overshoot_vel_tol=0.2,
-            overshoot_att_tol=0.2,
-            overshoot_ang_vel_tol=0.1,
+            overshoot_pos_tol=0.0,
+            overshoot_vel_tol=0.0,
+            overshoot_att_tol=0.0,
+            overshoot_ang_vel_tol=0.0,
         )
 
         # ==================== 回合跟踪 ====================
@@ -272,6 +272,10 @@ class QuadcopterEnv(gym.Env):
         self.current_step = 0
         self.episode_reward = 0.0
         self.step_log_rows = []
+
+        if hasattr(self, "_pid_history"):
+            self._pid_history = []
+            self._pid_time_history = []
 
         # 重置仿真组件
         self._initialize_simulation()
@@ -467,8 +471,7 @@ class QuadcopterEnv(gym.Env):
             self.csv_initialized = False
         
         row_data = {
-            'step': getattr(self, 'step_count', 0),
-            'episode': getattr(self, 'episode_count', 0),
+            'step': getattr(self, 'current_step', 0),
             **reward_dict
         }
         
@@ -527,7 +530,7 @@ class QuadcopterEnv(gym.Env):
         # ============================================================
         # 阶段4：奖励计算
         # ============================================================
-        segment_reward, reward_for_debug, metrics = self._compute_segment_reward_step([sample])
+        segment_reward, reward_for_debug, metrics = self._compute_reward_step([sample])
 
         # 统一奖励缩放
         reward = segment_reward * self.reward_scale
@@ -577,8 +580,23 @@ class QuadcopterEnv(gym.Env):
             obs = self._get_observation(self.ctrl.sDesCalc)
             return obs, reward, terminated, truncated, info
 
+        # ============================================================
+        # 🆕 数据记录
+        # ============================================================
+        # 记录历史数据到数组
+        self._record_episode_step()
+
         # 记录调试信息
         if self.eval_mode:
+            if not hasattr(self, "_pid_history"):
+                self._pid_history = []
+                self._pid_time_history = []
+            
+            pid_vec = getattr(self, "pid_K_prev_vec", None)
+            if pid_vec is not None and np.size(pid_vec) == 20:
+                self._pid_history.append(np.asarray(pid_vec, dtype=float).copy())
+                self._pid_time_history.append(float(self.time))
+
             reward_for_debug['segment_reward'] = segment_reward
             reward_for_debug['reward_total_before_scale'] = segment_reward
             self._log_reward_to_csv(reward_for_debug)
@@ -709,10 +727,6 @@ class QuadcopterEnv(gym.Env):
             "ang_vel": [0, 0, 0]
         }
         
-        vel_tol = self.limits["overshoot_vel_tol"]
-        att_tol = self.limits["overshoot_att_tol"]
-        ang_vel_tol = self.limits["overshoot_ang_vel_tol"]
-
         vel_err = [error["vel_err_x"], error["vel_err_y"], error["vel_err_z"]]
         att_err = [error["att_err_roll"], error["att_err_pitch"], error["att_err_yaw"]]
         ang_vel_err = [error["omega_err_p"], error["omega_err_q"], error["omega_err_r"]]
@@ -722,29 +736,26 @@ class QuadcopterEnv(gym.Env):
         # 检测超调：三轴速度
         for i in range(3):
             current_vel = float(self.quad.vel[i])
-            if vel_err[i] * current_vel < 0 and abs(vel_err[i]) > vel_tol:
+            if vel_err[i] * current_vel < 0 and abs(vel_err[i]) > self.limits["overshoot_vel_tol"]:
                 overshoot_results['vel'][i] = vel_err[i]
                 overthrow_detected = True
 
         # 检测超调：三轴姿态
         for i in range(3):
             current_att = float(self.quad.euler[i])
-            if att_err[i] * current_att < 0 and abs(att_err[i]) > att_tol:
+            if att_err[i] * current_att < 0 and abs(att_err[i]) > self.limits["overshoot_att_tol"]:
                 overshoot_results['att'][i] = att_err[i]
-                overthrow_detected = True
+                overthrow_detected = False
 
         # 检测超调：三轴角速度
         for i in range(3):
             current_ang_vel = float(self.quad.omega[i])
-            if ang_vel_err[i] * current_ang_vel < 0 and abs(ang_vel_err[i]) > ang_vel_tol:
+            if ang_vel_err[i] * current_ang_vel < 0 and abs(ang_vel_err[i]) > self.limits["overshoot_ang_vel_tol"]:
                 overshoot_results['ang_vel'][i] = ang_vel_err[i]
-                overthrow_detected = True
+                overthrow_detected = False
         
         if isinstance(overshoot_results, dict):
-            overshoot_hits_sum = sum(
-                sum(1.0 for v in overshoot_results.get(key, []) if v != 0)
-                for key in ['vel', 'att', 'ang_vel']
-            )
+            overshoot_hits_sum = sum(overshoot_results.get('vel', []))
         else:
             overshoot_hits_sum = 0.0
 
@@ -816,7 +827,7 @@ class QuadcopterEnv(gym.Env):
         }
         return entry
 
-    def _compute_segment_reward_step(self, samples: List[Dict[str, float]]) -> Tuple[float, Dict[str, float], Dict]:
+    def _compute_reward_step(self, samples: List[Dict[str, float]]) -> Tuple[float, Dict[str, float], Dict]:
         """
         计算当前步的奖励（🔄 统一时间步长后样本列表长度恒为1）
         """
@@ -986,111 +997,35 @@ class QuadcopterEnv(gym.Env):
     # =========================
     # 渲染
     # =========================
-    def render(self, mode='human'):
-        """渲染环境（在线可视化）"""
-        if mode not in ('human', None):
+    def render(self, mode='human', save_path=None):
+        """
+        离线渲染环境（episode 结束后绘制完整图表）
+        
+        Args:
+            mode: 渲染模式，'human' 或 'rgb_array'
+            save_path: 图片保存路径，如 'results/episode_001.png'
+        """
+        if mode not in ('human', 'rgb_array', None):
             return
 
         try:
+            import matplotlib
+            if save_path:
+                matplotlib.use('Agg')  # 无GUI后端，用于保存图片
             import matplotlib.pyplot as plt
         except Exception as e:
             log.warning(f"Matplotlib 不可用，跳过渲染: {e}")
             return
 
-        # 懒加载初始化（主渲染窗口）
-        if not hasattr(self, "_render_initialized") or not getattr(self, "_render_initialized", False):
-            plt.ion()
-            self._render_fig = plt.figure(figsize=(16, 9))
-            self._render_fig.suptitle(f"PX4 Env Render - ctrl: {self.control_type}, traj: {self.trajectory_type}", fontsize=12)
-
-            gs = self._render_fig.add_gridspec(2, 3, height_ratios=[2.0, 1.4], wspace=0.25, hspace=0.35)
-            self._ax_pos = self._render_fig.add_subplot(gs[0, 0])
-            self._ax_vel = self._render_fig.add_subplot(gs[0, 1])
-            self._ax_att = self._render_fig.add_subplot(gs[0, 2])
-            self._ax_omega = self._render_fig.add_subplot(gs[1, 0])
-            self._ax_act_bar = self._render_fig.add_subplot(gs[1, 1])
-            self._ax_act_hist = self._render_fig.add_subplot(gs[1, 2])
-
-            # 位置曲线
-            (self._ln_px,) = self._ax_pos.plot([], [], 'b-', lw=1.5, label='X')
-            (self._ln_py,) = self._ax_pos.plot([], [], 'g-', lw=1.5, label='Y')
-            (self._ln_pz,) = self._ax_pos.plot([], [], 'r-', lw=1.5, label='Z')
-            (self._ln_px_ref,) = self._ax_pos.plot([], [], 'b--', lw=1.0, alpha=0.9, label='X_ref')
-            (self._ln_py_ref,) = self._ax_pos.plot([], [], 'g--', lw=1.0, alpha=0.9, label='Y_ref')
-            (self._ln_pz_ref,) = self._ax_pos.plot([], [], 'r--', lw=1.0, alpha=0.9, label='Z_ref')
-            self._ax_pos.set_title("Position (m)")
-            self._ax_pos.set_xlabel("t (s)")
-            self._ax_pos.legend(loc='upper right', fontsize=8)
-            self._ax_pos.grid(alpha=0.3)
-
-            # 速度曲线
-            (self._ln_vx,) = self._ax_vel.plot([], [], 'b-', lw=1.5, label='Vx')
-            (self._ln_vy,) = self._ax_vel.plot([], [], 'g-', lw=1.5, label='Vy')
-            (self._ln_vz,) = self._ax_vel.plot([], [], 'r-', lw=1.5, label='Vz')
-            (self._ln_vx_ref,) = self._ax_vel.plot([], [], 'b--', lw=1.0, alpha=0.9, label='Vx_ref')
-            (self._ln_vy_ref,) = self._ax_vel.plot([], [], 'g--', lw=1.0, alpha=0.9, label='Vy_ref')
-            (self._ln_vz_ref,) = self._ax_vel.plot([], [], 'r--', lw=1.0, alpha=0.9, label='Vz_ref')
-            self._ax_vel.set_title("Velocity (m/s)")
-            self._ax_vel.set_xlabel("t (s)")
-            self._ax_vel.legend(loc='upper right', fontsize=8)
-            self._ax_vel.grid(alpha=0.3)
-
-            # 姿态曲线（度）
-            (self._ln_roll,) = self._ax_att.plot([], [], 'b-', lw=1.5, label='Roll')
-            (self._ln_pitch,) = self._ax_att.plot([], [], 'g-', lw=1.5, label='Pitch')
-            (self._ln_yaw,) = self._ax_att.plot([], [], 'r-', lw=1.5, label='Yaw')
-            (self._ln_roll_ref,) = self._ax_att.plot([], [], 'b--', lw=1.0, alpha=0.9, label='Roll_ref')
-            (self._ln_pitch_ref,) = self._ax_att.plot([], [], 'g--', lw=1.0, alpha=0.9, label='Pitch_ref')
-            (self._ln_yaw_ref,) = self._ax_att.plot([], [], 'r--', lw=1.0, alpha=0.9, label='Yaw_ref')
-            self._ax_att.set_title("Attitude (deg)")
-            self._ax_att.set_xlabel("t (s)")
-            self._ax_att.legend(loc='upper right', fontsize=8)
-            self._ax_att.grid(alpha=0.3)
-
-            # 角速度曲线
-            (self._ln_p,) = self._ax_omega.plot([], [], 'b-', lw=1.5, label='p')
-            (self._ln_q,) = self._ax_omega.plot([], [], 'g-', lw=1.5, label='q')
-            (self._ln_r,) = self._ax_omega.plot([], [], 'r-', lw=1.5, label='r')
-            (self._ln_p_ref,) = self._ax_omega.plot([], [], 'b--', lw=1.0, alpha=0.9, label='p_ref')
-            (self._ln_q_ref,) = self._ax_omega.plot([], [], 'g--', lw=1.0, alpha=0.9, label='q_ref')
-            (self._ln_r_ref,) = self._ax_omega.plot([], [], 'r--', lw=1.0, alpha=0.9, label='r_ref')
-            self._ax_omega.set_title("Angular Velocity (rad/s)")
-            self._ax_omega.set_xlabel("t (s)")
-            self._ax_omega.legend(loc='upper right', fontsize=8)
-            self._ax_omega.grid(alpha=0.3)
-
-            # PID 当前值柱状图
-            self._ax_act_bar.set_title("PID Gains (current, 20 dims)")
-            self._ax_act_bar.set_xlabel("index (0-19)")
-            y_min = float(np.min(self.pid_safe_min)) if hasattr(self, "pid_safe_min") else 0.0
-            y_max = float(np.max(self.pid_safe_max)) if hasattr(self, "pid_safe_max") else 1.0
-            pad = 0.1 * max(1e-6, (y_max - y_min))
-            self._ax_act_bar.set_ylim(y_min - pad, y_max + pad)
-            self._ax_act_bar.set_xticks(range(0, 20, 2))
-            self._act_bars = self._ax_act_bar.bar(range(20), np.zeros(20), color="#4393c3")
-
-            # PID 全程历史热力图
-            self._hist_pid = []
-            self._hist_pid_t = []
-            self._ax_act_hist.set_title("PID Gains History (full)")
-            self._ax_act_hist.set_xlabel("dim (0-19)")
-            self._ax_act_hist.set_ylabel("step")
-            vmin = float(np.min(self.pid_safe_min)) if hasattr(self, "pid_safe_min") else 0.0
-            vmax = float(np.max(self.pid_safe_max)) if hasattr(self, "pid_safe_max") else 1.0
-            init_img = np.zeros((1, 20), dtype=float)
-            self._im_action = self._ax_act_hist.imshow(init_img, aspect='auto', origin='lower',
-                                                       vmin=vmin, vmax=vmax, cmap='viridis')
-            self._cbar = self._render_fig.colorbar(self._im_action, ax=self._ax_act_hist, fraction=0.046, pad=0.04)
-            self._cbar.set_label("Gain value")
-
-            self._render_initialized = True
-
-        # 🔄 修改：使用 current_step 替代 current_substep
+        # 检查是否有数据
         end_idx = int(self.current_step)
         if end_idx <= 1:
+            log.warning("渲染失败：没有足够的数据（current_step <= 1）")
             return
+        
         start_idx = 0
 
+        # 提取数据
         t = self.episode_t_all[start_idx:end_idx]
         pos = self.episode_pos_all[start_idx:end_idx]
         vel = self.episode_vel_all[start_idx:end_idx]
@@ -1102,107 +1037,560 @@ class QuadcopterEnv(gym.Env):
         eul_ref = np.rad2deg(self.episode_euler_des_all[start_idx:end_idx])
         omg_ref = self.episode_omega_des_all[start_idx:end_idx]
 
-        # 更新位置
-        self._ln_px.set_data(t, pos[:, 0]); self._ln_py.set_data(t, pos[:, 1]); self._ln_pz.set_data(t, pos[:, 2])
-        self._ln_px_ref.set_data(t, pos_ref[:, 0]); self._ln_py_ref.set_data(t, pos_ref[:, 1]); self._ln_pz_ref.set_data(t, pos_ref[:, 2])
-        self._ax_pos.relim(); self._ax_pos.autoscale_view()
+        # PID 历史数据（如果有）
+        pid_history = getattr(self, "_pid_history", [])
+        pid_time = getattr(self, "_pid_time_history", [])
 
-        # 更新速度
-        self._ln_vx.set_data(t, vel[:, 0]); self._ln_vy.set_data(t, vel[:, 1]); self._ln_vz.set_data(t, vel[:, 2])
-        self._ln_vx_ref.set_data(t, vel_ref[:, 0]); self._ln_vy_ref.set_data(t, vel_ref[:, 1]); self._ln_vz_ref.set_data(t, vel_ref[:, 2])
-        self._ax_vel.relim(); self._ax_vel.autoscale_view()
+        # ==================== 创建图表 ====================
+        fig = plt.figure(figsize=(18, 12))
+        fig.suptitle(
+            f"Episode Render - ctrl: {self.control_type}, traj: {self.trajectory_type}\n"
+            f"Steps: {end_idx}, Time: {t[-1]:.2f}s, Final Reward: {self.episode_reward:.2f}",
+            fontsize=14, fontweight='bold'
+        )
 
-        # 更新姿态（度）
-        self._ln_roll.set_data(t, eul[:, 0]); self._ln_pitch.set_data(t, eul[:, 1]); self._ln_yaw.set_data(t, eul[:, 2])
-        self._ln_roll_ref.set_data(t, eul_ref[:, 0]); self._ln_pitch_ref.set_data(t, eul_ref[:, 1]); self._ln_yaw_ref.set_data(t, eul_ref[:, 2])
-        self._ax_att.relim(); self._ax_att.autoscale_view()
+        # 布局：3行4列
+        gs = fig.add_gridspec(3, 4, hspace=0.35, wspace=0.30)
 
-        # 更新角速度
-        self._ln_p.set_data(t, omg[:, 0]); self._ln_q.set_data(t, omg[:, 1]); self._ln_r.set_data(t, omg[:, 2])
-        self._ln_p_ref.set_data(t, omg_ref[:, 0]); self._ln_q_ref.set_data(t, omg_ref[:, 1]); self._ln_r_ref.set_data(t, omg_ref[:, 2])
-        self._ax_omega.relim(); self._ax_omega.autoscale_view()
+        # ==================== 第一行：位置、速度、姿态、角速度 ====================
+        ax_pos = fig.add_subplot(gs[0, 0])
+        ax_vel = fig.add_subplot(gs[0, 1])
+        ax_att = fig.add_subplot(gs[0, 2])
+        ax_omega = fig.add_subplot(gs[0, 3])
 
-        # PID 当前值与历史
-        pid_vec = getattr(self, "pid_K_prev_vec", None)
-        if pid_vec is None or np.size(pid_vec) != 20:
-            if hasattr(self, "pid_safe_min") and hasattr(self, "pid_safe_max"):
-                pid_vec = (self.pid_safe_min + self.pid_safe_max) / 2.0
-            else:
-                pid_vec = np.zeros(20, dtype=float)
-        pid_vec = np.asarray(pid_vec, dtype=float).ravel()
+        # 位置
+        ax_pos.plot(t, pos[:, 0], 'b-', lw=1.5, label='X')
+        ax_pos.plot(t, pos[:, 1], 'g-', lw=1.5, label='Y')
+        ax_pos.plot(t, pos[:, 2], 'r-', lw=1.5, label='Z')
+        ax_pos.plot(t, pos_ref[:, 0], 'b--', lw=1.0, alpha=0.7, label='X_ref')
+        ax_pos.plot(t, pos_ref[:, 1], 'g--', lw=1.0, alpha=0.7, label='Y_ref')
+        ax_pos.plot(t, pos_ref[:, 2], 'r--', lw=1.0, alpha=0.7, label='Z_ref')
+        ax_pos.set_title("Position (m)", fontweight='bold')
+        ax_pos.set_xlabel("Time (s)")
+        ax_pos.set_ylabel("Position (m)")
+        ax_pos.legend(loc='best', fontsize=8, ncol=2)
+        ax_pos.grid(alpha=0.3)
 
-        # 柱状图
-        for i, rect in enumerate(self._act_bars):
-            rect.set_height(float(pid_vec[i]))
+        # 速度
+        ax_vel.plot(t, vel[:, 0], 'b-', lw=1.5, label='Vx')
+        ax_vel.plot(t, vel[:, 1], 'g-', lw=1.5, label='Vy')
+        ax_vel.plot(t, vel[:, 2], 'r-', lw=1.5, label='Vz')
+        ax_vel.plot(t, vel_ref[:, 0], 'b--', lw=1.0, alpha=0.7, label='Vx_ref')
+        ax_vel.plot(t, vel_ref[:, 1], 'g--', lw=1.0, alpha=0.7, label='Vy_ref')
+        ax_vel.plot(t, vel_ref[:, 2], 'r--', lw=1.0, alpha=0.7, label='Vz_ref')
+        ax_vel.set_title("Velocity (m/s)", fontweight='bold')
+        ax_vel.set_xlabel("Time (s)")
+        ax_vel.set_ylabel("Velocity (m/s)")
+        ax_vel.legend(loc='best', fontsize=8, ncol=2)
+        ax_vel.grid(alpha=0.3)
 
-        # 全程历史热力图
-        self._hist_pid.append(pid_vec)
-        self._hist_pid_t.append(float(self.time))
-        pid_hist_arr = np.asarray(self._hist_pid)
-        if pid_hist_arr.ndim == 2 and pid_hist_arr.shape[0] > 0:
-            self._im_action.set_data(pid_hist_arr)
-            vmin = float(np.min(self.pid_safe_min)) if hasattr(self, "pid_safe_min") else float(pid_hist_arr.min())
-            vmax = float(np.max(self.pid_safe_max)) if hasattr(self, "pid_safe_max") else float(pid_hist_arr.max())
-            if vmax <= vmin:
-                vmax = vmin + 1.0
-            self._im_action.set_clim(vmin, vmax)
-            self._ax_act_hist.set_ylim(0, max(1, pid_hist_arr.shape[0]-1))
-            self._ax_act_hist.set_xlim(0, 19)
+        # 姿态
+        ax_att.plot(t, eul[:, 0], 'b-', lw=1.5, label='Roll')
+        ax_att.plot(t, eul[:, 1], 'g-', lw=1.5, label='Pitch')
+        ax_att.plot(t, eul[:, 2], 'r-', lw=1.5, label='Yaw')
+        ax_att.plot(t, eul_ref[:, 0], 'b--', lw=1.0, alpha=0.7, label='Roll_ref')
+        ax_att.plot(t, eul_ref[:, 1], 'g--', lw=1.0, alpha=0.7, label='Pitch_ref')
+        ax_att.plot(t, eul_ref[:, 2], 'r--', lw=1.0, alpha=0.7, label='Yaw_ref')
+        ax_att.set_title("Attitude (deg)", fontweight='bold')
+        ax_att.set_xlabel("Time (s)")
+        ax_att.set_ylabel("Angle (deg)")
+        ax_att.legend(loc='best', fontsize=8, ncol=2)
+        ax_att.grid(alpha=0.3)
 
-        # 懒加载初始化（20 路增益波形窗口）
-        if not hasattr(self, "_gains_initialized") or not getattr(self, "_gains_initialized", False):
-            self._gains_fig, axes = plt.subplots(4, 5, figsize=(14, 10), sharex=True)
-            self._gains_fig.suptitle("PID Gains Waveforms (full)", fontsize=12)
-            self._gain_axes = axes.flatten().tolist()
-            self._gain_lines = []
+        # 角速度
+        ax_omega.plot(t, omg[:, 0], 'b-', lw=1.5, label='p')
+        ax_omega.plot(t, omg[:, 1], 'g-', lw=1.5, label='q')
+        ax_omega.plot(t, omg[:, 2], 'r-', lw=1.5, label='r')
+        ax_omega.plot(t, omg_ref[:, 0], 'b--', lw=1.0, alpha=0.7, label='p_ref')
+        ax_omega.plot(t, omg_ref[:, 1], 'g--', lw=1.0, alpha=0.7, label='q_ref')
+        ax_omega.plot(t, omg_ref[:, 2], 'r--', lw=1.0, alpha=0.7, label='r_ref')
+        ax_omega.set_title("Angular Velocity (rad/s)", fontweight='bold')
+        ax_omega.set_xlabel("Time (s)")
+        ax_omega.set_ylabel("Ang. Vel. (rad/s)")
+        ax_omega.legend(loc='best', fontsize=8, ncol=2)
+        ax_omega.grid(alpha=0.3)
 
-            self._gain_names = [
-                "posP_xy", "posP_z",
-                "velP_xy", "velP_z",
-                "velI_xy", "velI_z",
-                "velD_xy", "velD_z",
-                "attP_phi", "attP_theta", "attP_psi",
-                "rateP_p", "rateP_q", "rateP_r",
-                "rateI_p", "rateI_q", "rateI_r",
-                "rateD_p", "rateD_q", "rateD_r",
-            ]
+        # ==================== 第二行：误差分析 ====================
+        ax_pos_err = fig.add_subplot(gs[1, 0])
+        ax_vel_err = fig.add_subplot(gs[1, 1])
+        ax_att_err = fig.add_subplot(gs[1, 2])
+        ax_omega_err = fig.add_subplot(gs[1, 3])
 
-            for i, ax in enumerate(self._gain_axes):
-                (ln,) = ax.plot([], [], 'C0-', lw=1.2)
-                self._gain_lines.append(ln)
-                title = self._gain_names[i] if i < len(self._gain_names) else f"K[{i}]"
-                ax.set_title(title, fontsize=9)
-                if hasattr(self, "pid_safe_min") and hasattr(self, "pid_safe_max") and len(self.pid_safe_min) == 20:
-                    ymin = float(self.pid_safe_min[i]); ymax = float(self.pid_safe_max[i])
-                    if ymax <= ymin:
-                        ymax = ymin + 1.0
-                    pad = 0.08 * (ymax - ymin)
-                    ax.set_ylim(ymin - pad, ymax + pad)
-                ax.grid(alpha=0.3)
-                if i >= 15:
-                    ax.set_xlabel("t (s)")
-            plt.tight_layout()
-            self._gains_initialized = True
+        # 位置误差
+        pos_err = pos_ref - pos
+        ax_pos_err.plot(t, pos_err[:, 0], 'b-', lw=1.5, label='err_X')
+        ax_pos_err.plot(t, pos_err[:, 1], 'g-', lw=1.5, label='err_Y')
+        ax_pos_err.plot(t, pos_err[:, 2], 'r-', lw=1.5, label='err_Z')
+        ax_pos_err.axhline(0, color='k', linestyle='--', linewidth=0.8, alpha=0.5)
+        ax_pos_err.set_title("Position Error (m)", fontweight='bold')
+        ax_pos_err.set_xlabel("Time (s)")
+        ax_pos_err.set_ylabel("Error (m)")
+        ax_pos_err.legend(loc='best', fontsize=8)
+        ax_pos_err.grid(alpha=0.3)
 
-        # 更新 20 路增益波形
-        if hasattr(self, "_gains_initialized") and self._gains_initialized:
-            t_gain = np.asarray(self._hist_pid_t, dtype=float) if len(self._hist_pid_t) > 0 else np.arange(pid_hist_arr.shape[0])
-            for i, ln in enumerate(self._gain_lines):
-                ln.set_data(t_gain, pid_hist_arr[:, i])
-                ax = self._gain_axes[i]
-                if t_gain.size > 1:
-                    ax.set_xlim(t_gain[0], t_gain[-1])
+        # 速度误差
+        vel_err = vel_ref - vel
+        ax_vel_err.plot(t, vel_err[:, 0], 'b-', lw=1.5, label='err_Vx')
+        ax_vel_err.plot(t, vel_err[:, 1], 'g-', lw=1.5, label='err_Vy')
+        ax_vel_err.plot(t, vel_err[:, 2], 'r-', lw=1.5, label='err_Vz')
+        ax_vel_err.axhline(0, color='k', linestyle='--', linewidth=0.8, alpha=0.5)
+        ax_vel_err.set_title("Velocity Error (m/s)", fontweight='bold')
+        ax_vel_err.set_xlabel("Time (s)")
+        ax_vel_err.set_ylabel("Error (m/s)")
+        ax_vel_err.legend(loc='best', fontsize=8)
+        ax_vel_err.grid(alpha=0.3)
 
-        # 刷新两个窗口
-        for fig in [getattr(self, "_render_fig", None), getattr(self, "_gains_fig", None)]:
-            if fig is None:
-                continue
-            fig.canvas.draw_idle()
-            try:
-                fig.canvas.flush_events()
-            except Exception:
-                pass
+        # 姿态误差
+        att_err = eul_ref - eul
+        ax_att_err.plot(t, att_err[:, 0], 'b-', lw=1.5, label='err_Roll')
+        ax_att_err.plot(t, att_err[:, 1], 'g-', lw=1.5, label='err_Pitch')
+        ax_att_err.plot(t, att_err[:, 2], 'r-', lw=1.5, label='err_Yaw')
+        ax_att_err.axhline(0, color='k', linestyle='--', linewidth=0.8, alpha=0.5)
+        ax_att_err.set_title("Attitude Error (deg)", fontweight='bold')
+        ax_att_err.set_xlabel("Time (s)")
+        ax_att_err.set_ylabel("Error (deg)")
+        ax_att_err.legend(loc='best', fontsize=8)
+        ax_att_err.grid(alpha=0.3)
+
+        # 角速度误差
+        omega_err = omg_ref - omg
+        ax_omega_err.plot(t, omega_err[:, 0], 'b-', lw=1.5, label='err_p')
+        ax_omega_err.plot(t, omega_err[:, 1], 'g-', lw=1.5, label='err_q')
+        ax_omega_err.plot(t, omega_err[:, 2], 'r-', lw=1.5, label='err_r')
+        ax_omega_err.axhline(0, color='k', linestyle='--', linewidth=0.8, alpha=0.5)
+        ax_omega_err.set_title("Angular Velocity Error (rad/s)", fontweight='bold')
+        ax_omega_err.set_xlabel("Time (s)")
+        ax_omega_err.set_ylabel("Error (rad/s)")
+        ax_omega_err.legend(loc='best', fontsize=8)
+        ax_omega_err.grid(alpha=0.3)
+
+        # ==================== 第三行：PID 增益分析 ====================
+        if len(pid_history) > 0 and len(pid_time) > 0:
+            pid_array = np.array(pid_history)  # shape: (T, 20)
+            pid_t = np.array(pid_time)
+
+            # 3D轨迹
+            ax_3d = fig.add_subplot(gs[2, 0], projection='3d')
+            ax_3d.plot(pos[:, 0], pos[:, 1], pos[:, 2], 'b-', lw=1.5, label='Actual')
+            ax_3d.plot(pos_ref[:, 0], pos_ref[:, 1], pos_ref[:, 2], 'r--', lw=1.0, alpha=0.7, label='Reference')
+            ax_3d.set_xlabel('X (m)')
+            ax_3d.set_ylabel('Y (m)')
+            ax_3d.set_zlabel('Z (m)')
+            ax_3d.set_title("3D Trajectory", fontweight='bold')
+            ax_3d.legend()
+            ax_3d.grid(alpha=0.3)
+
+            # PID 当前值柱状图
+            ax_pid_bar = fig.add_subplot(gs[2, 1])
+            pid_final = pid_array[-1, :]  # 最后一步的 PID 值
+            colors = plt.cm.viridis(np.linspace(0, 1, 20))
+            ax_pid_bar.bar(range(20), pid_final, color=colors, alpha=0.8)
+            ax_pid_bar.set_title("Final PID Gains", fontweight='bold')
+            ax_pid_bar.set_xlabel("Gain Index")
+            ax_pid_bar.set_ylabel("Gain Value")
+            ax_pid_bar.set_xticks(range(0, 20, 2))
+            ax_pid_bar.grid(axis='y', alpha=0.3)
+
+            # PID 历史热力图
+            ax_pid_heat = fig.add_subplot(gs[2, 2])
+            im = ax_pid_heat.imshow(
+                pid_array.T,  # shape: (20, T)
+                aspect='auto',
+                origin='lower',
+                cmap='viridis',
+                interpolation='nearest',
+                extent=[pid_t[0], pid_t[-1], 0, 20]
+            )
+            ax_pid_heat.set_title("PID Gains Heatmap", fontweight='bold')
+            ax_pid_heat.set_xlabel("Time (s)")
+            ax_pid_heat.set_ylabel("Gain Index")
+            ax_pid_heat.set_yticks(range(0, 20, 2))
+            cbar = fig.colorbar(im, ax=ax_pid_heat, fraction=0.046, pad=0.04)
+            cbar.set_label("Gain Value")
+
+            # 关键 PID 增益波形（选择 4 个代表性增益）
+            ax_pid_wave = fig.add_subplot(gs[2, 3])
+            key_indices = [0, 2, 8, 11]  # posP_xy, velP_xy, attP_phi, rateP_p
+            key_names = ["posP_xy", "velP_xy", "attP_phi", "rateP_p"]
+            for idx, name in zip(key_indices, key_names):
+                ax_pid_wave.plot(pid_t, pid_array[:, idx], lw=1.5, label=name)
+            ax_pid_wave.set_title("Key PID Gains Over Time", fontweight='bold')
+            ax_pid_wave.set_xlabel("Time (s)")
+            ax_pid_wave.set_ylabel("Gain Value")
+            ax_pid_wave.legend(loc='best', fontsize=8)
+            ax_pid_wave.grid(alpha=0.3)
+        else:
+            # 如果没有 PID 数据，显示 3D 轨迹和统计信息
+            ax_3d = fig.add_subplot(gs[2, :2], projection='3d')
+            ax_3d.plot(pos[:, 0], pos[:, 1], pos[:, 2], 'b-', lw=2, label='Actual')
+            ax_3d.plot(pos_ref[:, 0], pos_ref[:, 1], pos_ref[:, 2], 'r--', lw=1.5, alpha=0.7, label='Reference')
+            ax_3d.set_xlabel('X (m)')
+            ax_3d.set_ylabel('Y (m)')
+            ax_3d.set_zlabel('Z (m)')
+            ax_3d.set_title("3D Trajectory", fontweight='bold')
+            ax_3d.legend()
+            ax_3d.grid(alpha=0.3)
+
+            # 统计信息
+            ax_stats = fig.add_subplot(gs[2, 2:])
+            ax_stats.axis('off')
+            
+            # 计算 RMSE
+            pos_rmse = np.sqrt(np.mean(pos_err**2, axis=0))
+            vel_rmse = np.sqrt(np.mean(vel_err**2, axis=0))
+            att_rmse = np.sqrt(np.mean(att_err**2, axis=0))
+            
+            stats_text = f"""
+            Episode Statistics:
+            ==================
+            Total Steps: {end_idx}
+            Episode Time: {t[-1]:.2f} s
+            Episode Reward: {self.episode_reward:.2f}
+            
+            Position RMSE (m):
+            X: {pos_rmse[0]:.4f}
+            Y: {pos_rmse[1]:.4f}
+            Z: {pos_rmse[2]:.4f}
+            
+            Velocity RMSE (m/s):
+            Vx: {vel_rmse[0]:.4f}
+            Vy: {vel_rmse[1]:.4f}
+            Vz: {vel_rmse[2]:.4f}
+            
+            Attitude RMSE (deg):
+            Roll:  {att_rmse[0]:.4f}
+            Pitch: {att_rmse[1]:.4f}
+            Yaw:   {att_rmse[2]:.4f}
+            """
+            ax_stats.text(0.1, 0.5, stats_text, fontsize=10, family='monospace',
+                        verticalalignment='center', transform=ax_stats.transAxes)
+
+        # ==================== 保存或显示 ====================
+        if save_path:
+            # 确保目录存在
+            import os
+            os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else '.', exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            log.info(f"✅ 图表已保存到: {save_path}")
+            plt.close(fig)
+        else:
+            # 交互式显示
+            plt.show()
+        
+        if mode == 'rgb_array':
+            # 返回图像数组（用于视频制作）
+            fig.canvas.draw()
+            image = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
+            image = image.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            plt.close(fig)
+            return image
+
+    def render_pid_gains(self, save_path=None):
+        """
+        离线绘制 PID 增益波形图（20 路参数）
+        
+        Args:
+            save_path: 图片保存路径，如 'results/pid_gains.png'
+                    None 则交互式显示
+        """
         try:
-            plt.pause(0.005)
-        except Exception:
-            pass
+            import matplotlib
+            if save_path:
+                matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+        except Exception as e:
+            print(f"⚠️ Matplotlib 不可用: {e}")
+            return
+        
+        # 检查数据
+        pid_history = getattr(self, "_pid_history", [])
+        pid_time = getattr(self, "_pid_time_history", [])
+        
+        if len(pid_history) == 0:
+            print("⚠️ 没有 PID 历史数据，跳过绘制")
+            return
+        
+        pid_array = np.array(pid_history)  # shape: (T, 20)
+        pid_t = np.array(pid_time)
+        
+        # PID 参数名称
+        gain_names = [
+            "posP_xy", "posP_z",
+            "velP_xy", "velP_z",
+            "velI_xy", "velI_z",
+            "velD_xy", "velD_z",
+            "attP_phi", "attP_theta", "attP_psi",
+            "rateP_p", "rateP_q", "rateP_r",
+            "rateI_p", "rateI_q", "rateI_r",
+            "rateD_p", "rateD_q", "rateD_r",
+        ]
+        
+        # ==================== 创建图表 ====================
+        fig, axes = plt.subplots(4, 5, figsize=(20, 12), sharex=True)
+        fig.suptitle(
+            f"PID Gains Evolution - {self.control_type} | Traj: {self.trajectory_type}\n"
+            f"Total Steps: {len(pid_t)}, Time: {pid_t[-1]:.2f}s",
+            fontsize=14, fontweight='bold'
+        )
+        
+        # 绘制 20 路 PID 波形
+        for i, (ax, name) in enumerate(zip(axes.flatten(), gain_names)):
+            ax.plot(pid_t, pid_array[:, i], 'C0-', lw=1.5, alpha=0.8)
+            ax.set_title(name, fontsize=10, fontweight='bold')
+            ax.grid(alpha=0.3)
+            
+            # 设置 Y 轴范围（如果有安全边界）
+            if hasattr(self, "pid_safe_min") and hasattr(self, "pid_safe_max"):
+                ymin = float(self.pid_safe_min[i])
+                ymax = float(self.pid_safe_max[i])
+                pad = 0.05 * (ymax - ymin)
+                ax.set_ylim(ymin - pad, ymax + pad)
+                
+                # 绘制安全边界
+                ax.axhline(ymin, color='red', linestyle='--', linewidth=1, alpha=0.5)
+                ax.axhline(ymax, color='red', linestyle='--', linewidth=1, alpha=0.5)
+            
+            # 最后一行添加 X 轴标签
+            if i >= 15:
+                ax.set_xlabel("Time (s)", fontsize=9)
+            
+            # 第一列添加 Y 轴标签
+            if i % 5 == 0:
+                ax.set_ylabel("Gain Value", fontsize=9)
+        
+        plt.tight_layout()
+        
+        # 保存或显示
+        if save_path:
+            import os
+            os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else '.', exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"✅ PID 增益图已保存: {save_path}")
+            plt.close(fig)
+        else:
+            plt.show()
+
+
+    def render_pid_summary(self, save_path=None):
+        """
+        离线绘制 PID 增益摘要图（包含热力图、柱状图、关键波形）
+        
+        Args:
+            save_path: 图片保存路径，如 'results/pid_summary.png'
+        """
+        try:
+            import matplotlib
+            if save_path:
+                matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+        except Exception as e:
+            print(f"⚠️ Matplotlib 不可用: {e}")
+            return
+        
+        # 检查数据
+        pid_history = getattr(self, "_pid_history", [])
+        pid_time = getattr(self, "_pid_time_history", [])
+        
+        if len(pid_history) == 0:
+            print("⚠️ 没有 PID 历史数据，跳过绘制")
+            return
+        
+        pid_array = np.array(pid_history)  # shape: (T, 20)
+        pid_t = np.array(pid_time)
+        
+        gain_names = [
+            "posP_xy", "posP_z", "velP_xy", "velP_z",
+            "velI_xy", "velI_z", "velD_xy", "velD_z",
+            "attP_phi", "attP_theta", "attP_psi",
+            "rateP_p", "rateP_q", "rateP_r",
+            "rateI_p", "rateI_q", "rateI_r",
+            "rateD_p", "rateD_q", "rateD_r",
+        ]
+        
+        # ==================== 创建图表 ====================
+        fig = plt.figure(figsize=(20, 10))
+        fig.suptitle(
+            f"PID Gains Summary - {self.control_type} | Traj: {self.trajectory_type}",
+            fontsize=14, fontweight='bold'
+        )
+        
+        gs = fig.add_gridspec(2, 3, hspace=0.3, wspace=0.3)
+        
+        # ==================== 1. 热力图 ====================
+        ax1 = fig.add_subplot(gs[0, 0])
+        im = ax1.imshow(
+            pid_array.T,
+            aspect='auto',
+            origin='lower',
+            cmap='viridis',
+            interpolation='nearest',
+            extent=[pid_t[0], pid_t[-1], 0, 20]
+        )
+        ax1.set_xlabel("Time (s)")
+        ax1.set_ylabel("Gain Index")
+        ax1.set_title("PID Gains Heatmap", fontweight='bold')
+        ax1.set_yticks(range(0, 20, 2))
+        cbar = plt.colorbar(im, ax=ax1, fraction=0.046, pad=0.04)
+        cbar.set_label("Gain Value")
+        
+        # ==================== 2. 最终值柱状图 ====================
+        ax2 = fig.add_subplot(gs[0, 1])
+        pid_final = pid_array[-1, :]
+        colors = plt.cm.viridis(np.linspace(0, 1, 20))
+        ax2.bar(range(20), pid_final, color=colors, alpha=0.8, edgecolor='black')
+        ax2.set_xlabel("Gain Index")
+        ax2.set_ylabel("Gain Value")
+        ax2.set_title("Final PID Gains", fontweight='bold')
+        ax2.set_xticks(range(0, 20, 2))
+        ax2.grid(axis='y', alpha=0.3)
+        
+        # ==================== 3. 初始值 vs 最终值对比 ====================
+        ax3 = fig.add_subplot(gs[0, 2])
+        x_pos = np.arange(20)
+        width = 0.35
+        ax3.bar(x_pos - width/2, pid_array[0, :], width, label='Initial', alpha=0.7, color='steelblue')
+        ax3.bar(x_pos + width/2, pid_array[-1, :], width, label='Final', alpha=0.7, color='orange')
+        ax3.set_xlabel("Gain Index")
+        ax3.set_ylabel("Gain Value")
+        ax3.set_title("Initial vs Final PID Gains", fontweight='bold')
+        ax3.set_xticks(range(0, 20, 2))
+        ax3.legend()
+        ax3.grid(axis='y', alpha=0.3)
+        
+        # ==================== 4. 位置控制增益波形 ====================
+        ax4 = fig.add_subplot(gs[1, 0])
+        pos_indices = [0, 1, 2, 3]  # posP_xy, posP_z, velP_xy, velP_z
+        pos_names = ["posP_xy", "posP_z", "velP_xy", "velP_z"]
+        for idx, name in zip(pos_indices, pos_names):
+            ax4.plot(pid_t, pid_array[:, idx], lw=1.5, label=name)
+        ax4.set_xlabel("Time (s)")
+        ax4.set_ylabel("Gain Value")
+        ax4.set_title("Position Control Gains", fontweight='bold')
+        ax4.legend(loc='best', fontsize=9)
+        ax4.grid(alpha=0.3)
+        
+        # ==================== 5. 姿态控制增益波形 ====================
+        ax5 = fig.add_subplot(gs[1, 1])
+        att_indices = [8, 9, 10, 11]  # attP_phi, attP_theta, attP_psi, rateP_p
+        att_names = ["attP_phi", "attP_theta", "attP_psi", "rateP_p"]
+        for idx, name in zip(att_indices, att_names):
+            ax5.plot(pid_t, pid_array[:, idx], lw=1.5, label=name)
+        ax5.set_xlabel("Time (s)")
+        ax5.set_ylabel("Gain Value")
+        ax5.set_title("Attitude Control Gains", fontweight='bold')
+        ax5.legend(loc='best', fontsize=9)
+        ax5.grid(alpha=0.3)
+        
+        # ==================== 6. 增益变化率 ====================
+        ax6 = fig.add_subplot(gs[1, 2])
+        pid_diff = np.diff(pid_array, axis=0)  # 一阶差分
+        pid_change = np.abs(pid_diff).sum(axis=1)  # 总变化量
+        ax6.plot(pid_t[1:], pid_change, 'C0-', lw=1.5)
+        ax6.set_xlabel("Time (s)")
+        ax6.set_ylabel("Total Change Rate")
+        ax6.set_title("PID Gains Change Rate", fontweight='bold')
+        ax6.grid(alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # 保存或显示
+        if save_path:
+            import os
+            os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else '.', exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"✅ PID 摘要图已保存: {save_path}")
+            plt.close(fig)
+        else:
+            plt.show()
+
+
+    def render_pid_statistics(self, save_path=None):
+        """
+        离线绘制 PID 增益统计分析图
+        
+        Args:
+            save_path: 图片保存路径
+        """
+        try:
+            import matplotlib
+            if save_path:
+                matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+        except Exception as e:
+            print(f"⚠️ Matplotlib 不可用: {e}")
+            return
+        
+        pid_history = getattr(self, "_pid_history", [])
+        
+        if len(pid_history) == 0:
+            print("⚠️ 没有 PID 历史数据")
+            return
+        
+        pid_array = np.array(pid_history)
+        
+        # 计算统计量
+        pid_mean = np.mean(pid_array, axis=0)
+        pid_std = np.std(pid_array, axis=0)
+        pid_min = np.min(pid_array, axis=0)
+        pid_max = np.max(pid_array, axis=0)
+        
+        # 创建图表
+        fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+        fig.suptitle("PID Gains Statistical Analysis", fontsize=14, fontweight='bold')
+        
+        # 1. 均值 ± 标准差
+        ax = axes[0, 0]
+        x_pos = np.arange(20)
+        ax.bar(x_pos, pid_mean, yerr=pid_std, capsize=5, alpha=0.7, color='steelblue', edgecolor='black')
+        ax.set_xlabel("Gain Index")
+        ax.set_ylabel("Mean ± Std")
+        ax.set_title("Mean and Standard Deviation")
+        ax.set_xticks(range(0, 20, 2))
+        ax.grid(axis='y', alpha=0.3)
+        
+        # 2. 最小值 vs 最大值
+        ax = axes[0, 1]
+        width = 0.35
+        ax.bar(x_pos - width/2, pid_min, width, label='Min', alpha=0.7, color='red')
+        ax.bar(x_pos + width/2, pid_max, width, label='Max', alpha=0.7, color='green')
+        ax.set_xlabel("Gain Index")
+        ax.set_ylabel("Value")
+        ax.set_title("Min vs Max")
+        ax.set_xticks(range(0, 20, 2))
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        
+        # 3. 变化范围（Max - Min）
+        ax = axes[1, 0]
+        pid_range = pid_max - pid_min
+        colors = ['red' if r > 0.5 else 'green' for r in pid_range]
+        ax.bar(x_pos, pid_range, alpha=0.7, color=colors, edgecolor='black')
+        ax.set_xlabel("Gain Index")
+        ax.set_ylabel("Range (Max - Min)")
+        ax.set_title("Variation Range")
+        ax.set_xticks(range(0, 20, 2))
+        ax.grid(axis='y', alpha=0.3)
+        
+        # 4. 变异系数（Coefficient of Variation）
+        ax = axes[1, 1]
+        pid_cv = pid_std / (pid_mean + 1e-8)  # 避免除零
+        colors = ['red' if cv > 0.3 else 'green' for cv in pid_cv]
+        ax.bar(x_pos, pid_cv, alpha=0.7, color=colors, edgecolor='black')
+        ax.set_xlabel("Gain Index")
+        ax.set_ylabel("CV (Std / Mean)")
+        ax.set_title("Coefficient of Variation")
+        ax.set_xticks(range(0, 20, 2))
+        ax.axhline(0.3, color='orange', linestyle='--', linewidth=2, label='Threshold=0.3')
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        
+        plt.tight_layout()
+        
+        if save_path:
+            import os
+            os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else '.', exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"✅ PID 统计图已保存: {save_path}")
+            plt.close(fig)
+        else:
+            plt.show()

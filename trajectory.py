@@ -149,13 +149,12 @@ class Trajectory:
         
         # ==================== 新拆分轨迹参数 ====================
         if self.xyzType in [1001, 1002, 1003]:
-            # 俯仰/滚转/耦合阶跃测试（各30秒）
-            self.vel_step_duration = 5.0
-            self.vel_zero_duration = 5.0
-            self.vel_cycle_time = 10.0
-            # self.vel_levels = [2.0, 5.0, 10.0]
-            self.vel_levels = [5.0, 5.0, 5.0]
-            self.num_steps = len(self.vel_levels)
+            # 统一序列：每段 5s，序列为 0 -> 2 -> 0 -> 5 -> 0 -> 10 （总 30s）
+            self.step_duration = 5.0
+            self.step_sequence = [0.0, 2.0, 0.0, 5.0, 0.0, 10.0]
+            self.num_steps = len(self.step_sequence)
+            self.total_seq_time = self.step_duration * self.num_steps
+            # 耦合时 roll = pitch * roll_pitch_ratio
             self.roll_pitch_ratio = 0.6
             self.current_step = 0
             self.last_cycle_start_time = 0
@@ -333,56 +332,32 @@ class Trajectory:
     def _vel_pitch_only_step(self, t):
         """xyzType=1001: 俯仰轴阶跃测试（30秒）"""
         desVel = np.zeros(3)
-        
-        current_step = int(t // self.vel_cycle_time)
-        if current_step >= self.num_steps:
+        idx = int(t // self.step_duration)
+        if idx >= self.num_steps:
             return desVel
-        
-        time_in_cycle = t - current_step * self.vel_cycle_time
-        current_vel = self.vel_levels[current_step]
-        is_step_phase = (time_in_cycle < self.vel_step_duration)
-        
-        # 仅俯仰轴（X轴）
-        desVel[0] = current_vel if is_step_phase else 0.0
-        
+        desVel[0] = float(self.step_sequence[idx])
         return desVel
     
     def _vel_roll_only_step(self, t):
         """xyzType=1002: 滚转轴阶跃测试（30秒）"""
         desVel = np.zeros(3)
-        
-        current_step = int(t // self.vel_cycle_time)
-        if current_step >= self.num_steps:
+        idx = int(t // self.step_duration)
+        if idx >= self.num_steps:
             return desVel
-        
-        time_in_cycle = t - current_step * self.vel_cycle_time
-        current_vel = self.vel_levels[current_step]
-        is_step_phase = (time_in_cycle < self.vel_step_duration)
-        
-        # 仅滚转轴（Y轴）
-        desVel[1] = current_vel if is_step_phase else 0.0
-        
+        desVel[1] = float(self.step_sequence[idx])
         return desVel
     
     def _vel_coupled_step(self, t):
         """xyzType=1003: 俯仰-滚转耦合阶跃测试（30秒）"""
         desVel = np.zeros(3)
-        
-        current_step = int(t // self.vel_cycle_time)
-        if current_step >= self.num_steps:
+        idx = int(t // self.step_duration)
+        if idx >= self.num_steps:
             return desVel
-        
-        time_in_cycle = t - current_step * self.vel_cycle_time
-        current_vel = self.vel_levels[current_step]
-        is_step_phase = (time_in_cycle < self.vel_step_duration)
-        
-        # 俯仰-滚转耦合
-        if is_step_phase:
-            desVel[0] = current_vel
-            desVel[1] = current_vel * self.roll_pitch_ratio
-        
+        v = float(self.step_sequence[idx])
+        desVel[0] = v
+        desVel[1] = v * self.roll_pitch_ratio
         return desVel
-    
+
     def _vel_sine_sweep_low_freq(self, t):
         """xyzType=1011: 正弦扫频扫幅 - 低频段（30秒）"""
         return self._vel_sine_sweep_generic(t)
