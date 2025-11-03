@@ -21,7 +21,8 @@ from quadFiles.quad import Quadcopter
 from utils.windModel import Wind
 import utils
 import config
-
+# ============ 测试的回合数 ============
+NUM_EPISODES = 10
 # ============ UDP 通信配置 ============
 UDP_CONFIG = {
     'enabled': True,               # 是否启用 UDP 通信
@@ -105,7 +106,9 @@ class QuadUDPInterface:
         # 最新接收到的动作
         self.latest_action = normalize_pid_parameters(BASELINE_PID_PARAMS)
         self.action_lock = threading.Lock()
-        
+
+        # 最新解析出的原始 PID 参数向量（20维），用于记录
+        self.latest_K_array = BASELINE_PID_PARAMS.copy()
         # 统计信息
         self.sent_count = 0
         self.recv_count = 0
@@ -223,6 +226,9 @@ class QuadUDPInterface:
         # action ∈ [-1,1] 映射到 PID 参数的安全范围 [MIN_PID_PARAMS, MAX_PID_PARAMS]
         range_vec = MAX_PID_PARAMS - MIN_PID_PARAMS
         K_array = MIN_PID_PARAMS + (action + 1.0) / 2.0 * range_vec
+
+        # 保存最新原始 PID 向量，供外部记录使用
+        self.latest_K_array = K_array.copy()
         
         # 构建字典格式（注意：你的控制器期望 xyz 三维，但训练只用了 xy+z 两维）
         gains_dict = {
@@ -314,7 +320,7 @@ def main():
     # --------------------------- 
     Ti = 0
     Ts = 0.005
-    Tf = 30
+    Tf = 30 * NUM_EPISODES
     ifsave = 0
 
     # Choose trajectory settings
@@ -326,7 +332,7 @@ def main():
     ctrlType = ctrlOptions[2]
     
     # Select Position Trajectory Type
-    trajSelect[0] = 1001
+    trajSelect[0] = 1012
 
     # Select Yaw Trajectory Type
     trajSelect[1] = 3
@@ -347,6 +353,10 @@ def main():
     # ---------------------------
     udp_interface = QuadUDPInterface(UDP_CONFIG)
 
+    # 确保 latest_K_array 有初始值
+    if not hasattr(udp_interface, 'latest_K_array'):
+        udp_interface.latest_K_array = BASELINE_PID_PARAMS.copy()
+
     # Trajectory for First Desired States
     # ---------------------------
     sDes = traj.desiredState(0, Ts, quad)
@@ -358,6 +368,10 @@ def main():
     # Initialize Result Matrixes
     # ---------------------------
     numTimeStep = int(Tf/Ts+1)
+
+    # 用于在每个 step 记录 PID 参数（原始 20 维）
+    pid_params_all = np.zeros([numTimeStep, BASELINE_PID_PARAMS.shape[0]], dtype=np.float32)
+    pid_params_all[0] = udp_interface.latest_K_array.copy()
 
     t_all          = np.zeros(numTimeStep)
     s_all          = np.zeros([numTimeStep, len(quad.state)])
@@ -418,12 +432,12 @@ def main():
                             ctrl.update_gains(pid_params)
                             pid_update_count += 1
                             
-                            # 每 1000 次更新打印一次
-                            if pid_update_count % 1000 == 0:
-                                print(f"🎯 PID 更新 #{pid_update_count}:")
-                                print(f"   位置 P: {pid_params['pos_P_gains']}")
-                                print(f"   速度 P: {pid_params['vel_P_gains']}")
-                                print(f"   姿态 P: {pid_params['att_P_gains']}")
+                            # # 每 1000 次更新打印一次
+                            # if pid_update_count % 1000 == 0:
+                            #     print(f"🎯 PID 更新 #{pid_update_count}:")
+                            #     # print(f"   位置 P: {pid_params['pos_P_gains']}")
+                            #     # print(f"   速度 P: {pid_params['vel_P_gains']}")
+                            #     # print(f"   姿态 P: {pid_params['att_P_gains']}")
             
             # 3. 仿真步进
             t = quad_sim(t, Ts, quad, ctrl, wind, traj, udp_interface)
@@ -442,7 +456,8 @@ def main():
             wMotor_all[i,:]      = quad.wMotor
             thr_all[i,:]         = quad.thr
             tor_all[i,:]         = quad.tor
-            # print(f"当前参考值：{ctrl.sDesCalc}")
+            # 记录当前 step 的 PID 参数向量（若无人更新则为上一次值）
+            pid_params_all[i]    = udp_interface.latest_K_array.copy()
             i += 1
             
             # 5. 定期输出统计信息
@@ -466,8 +481,12 @@ def main():
 
     # View Results
     # ---------------------------
-    utils.makeFigures(quad.params, t_all, pos_all, vel_all, quat_all, omega_all, euler_all, 
-                      w_cmd_all, wMotor_all, thr_all, tor_all, sDes_traj_all, sDes_calc_all, trajSelect[0])
+    # utils.makeFigures(quad.params, t_all, pos_all, vel_all, quat_all, omega_all, euler_all, 
+    #                   w_cmd_all, wMotor_all, thr_all, tor_all, sDes_traj_all, sDes_calc_all, trajSelect[0])
+    
+    utils.makeFigures_ext(quad.params, t_all, pos_all, vel_all, quat_all, omega_all, euler_all, 
+                    w_cmd_all, wMotor_all, thr_all, tor_all, sDes_traj_all, sDes_calc_all, trajSelect[0], pid_params_all)
+    
     ani = utils.sameAxisAnimation(t_all, traj.wps, pos_all, quat_all, sDes_traj_all, Ts, 
                                   quad.params, traj.xyzType, traj.yawType, ifsave)
     # plt.show()

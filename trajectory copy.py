@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 """
 四旋翼轨迹生成器 - 重构版
@@ -60,9 +59,9 @@ class Trajectory:
     轨迹类型编码 (xyzType):
         速度跟踪轨迹 (100-199):
             *** 新拆分轨迹 ***
-            1001: 俯仰轴阶跃测试 (30秒)
+            * 1001: 俯仰轴阶跃测试 (30秒)
             1002: 滚转轴阶跃测试 (30秒)
-            * 1003: 俯仰-滚转耦合阶跃测试 (30秒)
+            1003: 俯仰-滚转耦合阶跃测试 (30秒)
             1011: 正弦扫频扫幅 - 低频段 (30秒)
             * 1012: 正弦扫频扫幅 - 高频段 (30秒)
             
@@ -165,7 +164,7 @@ class Trajectory:
             self.vel_amplitude_min = 3.0
             self.vel_amplitude_max = 10.0
             self.vel_amplitude_period = 30.0
-            self.vel_axis_ratio = np.array([0.6, 0.5, 0.3])
+            self.vel_axis_ratio = np.array([0.8, 0.2, 0.0])
             self.vel_phase = np.array([0, pi/3, 2*pi/3])
             
             if self.xyzType == 1011:
@@ -877,52 +876,16 @@ if __name__ == "__main__":
     from datetime import datetime
 
     # ========== 测试场景配置 ==========
+    # 仅保留需要绘制的四个场景：1001、1012、201、206
     scenarios = [
-        # ===== 新拆分速度轨迹 =====
-        {"ctrl": "xyz_vel", "xyz": 1001, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Pitch-Only Steps (NEW)"},
-        {"ctrl": "xyz_vel", "xyz": 1002, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Roll-Only Steps (NEW)"},
-        {"ctrl": "xyz_vel", "xyz": 1003, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Coupled Steps (NEW)"},
-        {"ctrl": "xyz_vel", "xyz": 1011, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Sine Sweep Low-Freq (NEW)"},
-        {"ctrl": "xyz_vel", "xyz": 1012, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Sine Sweep High-Freq (NEW)"},
-        
-        # ===== 原有速度轨迹（对比用） =====
-        {"ctrl": "xyz_vel", "xyz": 100, "yaw": 3, "duration": 90.0, 
-         "label": "Vel: Pitch-Roll Steps (ORIGINAL 90s)"},
-        {"ctrl": "xyz_vel", "xyz": 101, "yaw": 3, "duration": 60.0, 
-         "label": "Vel: Sine Sweep (ORIGINAL 60s)"},
-        
-        # ===== 其他速度轨迹 =====
-        {"ctrl": "xyz_vel", "xyz": 102, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Square Wave"},
-        {"ctrl": "xyz_vel", "xyz": 103, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Triangle Wave"},
-        {"ctrl": "xyz_vel", "xyz": 104, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Random Combined"},
-        {"ctrl": "xyz_vel", "xyz": 105, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: 3D Lissajous"},
-        
-        # ===== 位置跟踪轨迹 =====
-        {"ctrl": "xyz_pos", "xyz": 200, "yaw": 3, "duration": 60.0, 
-         "label": "Pos: Random Steps"},
-        {"ctrl": "xyz_pos", "xyz": 201, "yaw": 3, "duration": 45.0, 
+        {"ctrl": "xyz_vel", "xyz": 1001, "yaw": 3, "duration": 30.0,
+         "label": "Vel: Pitch-Only Steps"},
+        {"ctrl": "xyz_vel", "xyz": 1012, "yaw": 3, "duration": 30.0,
+         "label": "Vel: Sine Sweep High-Freq"},
+        {"ctrl": "xyz_pos", "xyz": 201, "yaw": 3, "duration": 30.0,
          "label": "Pos: Hybrid Demo"},
-        {"ctrl": "xyz_pos", "xyz": 202, "yaw": 3, "duration": 30.0, 
-         "label": "Pos: Circle"},
-        {"ctrl": "xyz_pos", "xyz": 203, "yaw": 3, "duration": 30.0, 
-         "label": "Pos: Figure-8"},
-        {"ctrl": "xyz_pos", "xyz": 204, "yaw": 3, "duration": 40.0, 
-         "label": "Pos: Square"},
-        {"ctrl": "xyz_pos", "xyz": 205, "yaw": 3, "duration": 40.0, 
-         "label": "Pos: Helix"},
-        {"ctrl": "xyz_pos", "xyz": 206, "yaw": 3, "duration": 30.0, 
+        {"ctrl": "xyz_pos", "xyz": 206, "yaw": 3, "duration": 30.0,
          "label": "Pos: 3D Lissajous"},
-        {"ctrl": "xyz_pos", "xyz": 207, "yaw": 3, "duration": 40.0, 
-         "label": "Pos: Random Polynomial"},
     ]
 
     Ts = 0.05
@@ -979,7 +942,7 @@ if __name__ == "__main__":
         vel_mag = np.linalg.norm(velocities, axis=1)
         ax2.plot(times, vel_mag, color='purple', linewidth=2, alpha=0.8)
         ax2.set_xlabel("Time (s)", fontsize=9)
-        ax2.set_ylabel("|V| (m/s)", fontsize=9)
+        ax2.set_ylabel("Velocity (m/s)", fontsize=9)
         ax2.set_title(info["label"] + " - Magnitude", fontsize=10)
         ax2.grid(True, alpha=0.3)
     
@@ -1020,22 +983,25 @@ if __name__ == "__main__":
     ax1 = fig_compare.add_subplot(2, 2, 1)
     for info, times, _, velocities, _ in vel_results:
         if info["xyz"] in [1001, 1002, 1003]:
-            ax1.plot(times, velocities[:, 0], label=f"{info['xyz']}-Vx", linewidth=1.5, alpha=0.7)
-            ax1.plot(times, velocities[:, 1], label=f"{info['xyz']}-Vy", linewidth=1.5, alpha=0.7)
+            ax1.plot(times, velocities[:, 0],  linewidth=2.5, alpha=0.7)
+            ax1.plot(times, velocities[:, 1],  linewidth=2.5, alpha=0.7)
     ax1.set_xlabel("Time (s)")
-    ax1.set_ylabel("Velocity (m/s)")
-    ax1.set_title("New Split Step Trajectories (1001/1002/1003)")
+    ax1.set_ylabel("Velocity (m/s)", 
+                        fontsize=12, fontweight='bold')
+    ax1.set_title("Velocity: Pitch-Only Steps", 
+                        fontsize=12, fontweight='bold')
     ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.3)
     
     ax2 = fig_compare.add_subplot(2, 2, 2)
     for info, times, _, velocities, _ in vel_results:
         if info["xyz"] == 100:
-            ax2.plot(times, velocities[:, 0], label="100-Vx", linewidth=1.5, alpha=0.7)
-            ax2.plot(times, velocities[:, 1], label="100-Vy", linewidth=1.5, alpha=0.7)
+            ax2.plot(times, velocities[:, 0], linewidth=2.5, alpha=0.7)
+            ax2.plot(times, velocities[:, 1], linewidth=2.5, alpha=0.7)
     ax2.set_xlabel("Time (s)")
-    ax2.set_ylabel("Velocity (m/s)")
-    ax2.set_title("Original Combined Trajectory (100)")
+    ax2.set_ylabel("Velocity (m/s)", 
+                        fontsize=12, fontweight='bold')
+    ax2.set_title("Original Combined Trajectory")
     ax2.legend(fontsize=8)
     ax2.grid(True, alpha=0.3)
     
@@ -1044,10 +1010,12 @@ if __name__ == "__main__":
     for info, times, _, velocities, _ in vel_results:
         if info["xyz"] in [1011, 1012]:
             vel_mag = np.linalg.norm(velocities, axis=1)
-            ax3.plot(times, vel_mag, label=f"{info['xyz']}", linewidth=2, alpha=0.7)
+            ax3.plot(times, vel_mag,  linewidth=2.5, alpha=0.7)
     ax3.set_xlabel("Time (s)")
-    ax3.set_ylabel("|V| (m/s)")
-    ax3.set_title("New Split Sweep Trajectories (1011/1012)")
+    ax3.set_ylabel("Velocity (m/s)", 
+                        fontsize=12, fontweight='bold')
+    ax3.set_title("Velocity: Pitch-Only Sine Sweep", 
+                        fontsize=12, fontweight='bold')
     ax3.legend(fontsize=8)
     ax3.grid(True, alpha=0.3)
     
@@ -1055,10 +1023,11 @@ if __name__ == "__main__":
     for info, times, _, velocities, _ in vel_results:
         if info["xyz"] == 101:
             vel_mag = np.linalg.norm(velocities, axis=1)
-            ax4.plot(times, vel_mag, label="101", linewidth=2, alpha=0.7, color='purple')
+            ax4.plot(times, vel_mag,  linewidth=2.5, alpha=0.7, color='purple')
     ax4.set_xlabel("Time (s)")
-    ax4.set_ylabel("|V| (m/s)")
-    ax4.set_title("Original Sweep Trajectory (101)")
+    ax4.set_ylabel("Velocity (m/s)", 
+                        fontsize=12, fontweight='bold')
+    ax4.set_title("Original Sweep Trajectory")
     ax4.legend(fontsize=8)
     ax4.grid(True, alpha=0.3)
     

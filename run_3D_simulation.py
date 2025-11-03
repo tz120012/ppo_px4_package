@@ -58,7 +58,7 @@ def main():
     #                                  7: minimum accel_stop        8: minimum jerk_stop        9: minimum snap_stop
     #                                 10: minimum jerk_full_stop   11: minimum snap_full_stop
     #                                 12: pos_waypoint_arrived     13: pos_waypoint_arrived_wait
-    trajSelect[0] = 1001
+    trajSelect[0] = 1012
 
     # Select Yaw Trajectory Type      (0: none                      1: yaw_waypoint_timed,      2: yaw_waypoint_interp     3: follow          4: zero)
     trajSelect[1] = 3           

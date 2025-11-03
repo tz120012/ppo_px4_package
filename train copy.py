@@ -1,9 +1,7 @@
-
 #!/usr/bin/env python3
 """
 PX4四旋翼PID参数优化PPO训练脚本
 基于tianshou框架实现
-学习率和梯度裁剪均基于epoch调度
 """
 
 import argparse
@@ -33,46 +31,28 @@ from px4Env import QuadcopterEnv
 
 # ==================== 梯度裁剪调度器 ====================
 class GradNormScheduler:
-    """梯度裁剪范数调度器（基于epoch）"""
-    def __init__(self, initial_norm=1.0, final_norm=0.01, total_epochs=1000, decay_type='linear'):
-        """
-        Args:
-            initial_norm: 初始梯度裁剪范数
-            final_norm: 最终梯度裁剪范数
-            total_epochs: 总训练轮数
-            decay_type: 衰减类型 ('linear', 'cosine', 'exponential')
-        """
+    """梯度裁剪范数调度器"""
+    def __init__(self, initial_norm=1.0, final_norm=0.01, total_steps=None, decay_type='linear'):
         self.initial_norm = initial_norm
         self.final_norm = final_norm
-        self.total_epochs = total_epochs
-        self.current_epoch = 0
+        self.total_steps = total_steps
+        self.current_step = 0
         self.decay_type = decay_type
         
-    def get_norm(self, epoch=None):
-        """
-        获取指定epoch的梯度裁剪范数
-        
-        Args:
-            epoch: 指定的epoch，如果为None则使用当前epoch
-        """
-        if epoch is None:
-            epoch = self.current_epoch
-            
-        if epoch >= self.total_epochs:
+    def get_norm(self):
+        """获取当前的梯度裁剪范数"""
+        if self.total_steps is None or self.current_step >= self.total_steps:
             return self.final_norm
             
-        progress = epoch / self.total_epochs
+        progress = self.current_step / self.total_steps
         
         if self.decay_type == 'linear':
-            # 线性衰减
             norm = self.initial_norm - (self.initial_norm - self.final_norm) * progress
         elif self.decay_type == 'cosine':
-            # 余弦衰减
             import math
             norm = self.final_norm + (self.initial_norm - self.final_norm) * \
                    0.5 * (1 + math.cos(math.pi * progress))
         elif self.decay_type == 'exponential':
-            # 指数衰减
             import math
             norm = self.final_norm + (self.initial_norm - self.final_norm) * \
                    math.exp(-5 * progress)
@@ -82,26 +62,16 @@ class GradNormScheduler:
         return max(norm, self.final_norm)
     
     def step(self):
-        """更新epoch计数"""
-        self.current_epoch += 1
+        """更新步数"""
+        self.current_step += 1
         
     def state_dict(self):
         """保存状态"""
-        return {
-            'current_epoch': self.current_epoch,
-            'initial_norm': self.initial_norm,
-            'final_norm': self.final_norm,
-            'total_epochs': self.total_epochs,
-            'decay_type': self.decay_type
-        }
+        return {'current_step': self.current_step}
     
     def load_state_dict(self, state_dict):
         """加载状态"""
-        self.current_epoch = state_dict['current_epoch']
-        self.initial_norm = state_dict.get('initial_norm', self.initial_norm)
-        self.final_norm = state_dict.get('final_norm', self.final_norm)
-        self.total_epochs = state_dict.get('total_epochs', self.total_epochs)
-        self.decay_type = state_dict.get('decay_type', self.decay_type)
+        self.current_step = state_dict['current_step']
 
 
 # ==================== JSON编码器 ====================
@@ -117,7 +87,6 @@ class NumpyEncoder(json.JSONEncoder):
         if isinstance(o, np.bool_):
             return bool(o)
         return super().default(o)
-
 
 # ==================== 参数解析 ====================
 def get_args() -> argparse.Namespace:
@@ -153,32 +122,23 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--ent-coef", type=float, default=0.0)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--bound-action-method", type=str, default="tanh")
+    parser.add_argument("--lr-decay", action="store_true")              # ✅ 修复：改为 action="store_true"
+
+    # ✅ 新增：梯度裁剪衰减参数
+    parser.add_argument("--grad-norm-decay", action="store_true",
+                       help="Enable gradient norm decay")
+    parser.add_argument("--grad-norm-decay-type", type=str, default="linear",
+                       choices=["linear", "cosine", "exponential"])
+    parser.add_argument("--max-grad-norm", type=float, default=1.0)     # ✅ 修改：改为1.0作为初始值
+    parser.add_argument("--final-grad-norm", type=float, default=0.01)  # ✅ 新增：最终梯度裁剪范数
     parser.add_argument("--eps-clip", type=float, default=0.2)
     parser.add_argument("--dual-clip", type=float, default=None)
     parser.add_argument("--value-clip", type=int, default=0)
     parser.add_argument("--norm-adv", type=int, default=0)
     parser.add_argument("--recompute-adv", type=int, default=1)
     
-    # 学习率衰减参数
-    parser.add_argument("--lr-decay", action="store_true",
-                       help="Enable learning rate decay based on epoch")
-    parser.add_argument("--lr-decay-type", type=str, default="linear",
-                       choices=["linear", "cosine", "exponential"],
-                       help="Learning rate decay type")
-    parser.add_argument("--min-lr-ratio", type=float, default=0.0,
-                       help="Minimum learning rate ratio (0.0 = decay to 0, 0.1 = decay to 10%)")
 
-    # 梯度裁剪衰减参数
-    parser.add_argument("--grad-norm-decay", action="store_true",
-                       help="Enable gradient norm decay based on epoch")
-    parser.add_argument("--grad-norm-decay-type", type=str, default="linear",
-                       choices=["linear", "cosine", "exponential"],
-                       help="Gradient norm decay type")
-    parser.add_argument("--max-grad-norm", type=float, default=0.5,
-                       help="Initial gradient clipping norm")
-    parser.add_argument("--final-grad-norm", type=float, default=0.5,
-                       help="Final gradient clipping norm (no decay if equal to max-grad-norm)")
-    
+        
     # 姿态越界阈值课程学习参数
     parser.add_argument("--attitude-bound-start", type=float, default=90.0,
                        help="Initial attitude bound threshold (degrees)")
@@ -191,13 +151,10 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--logdir", type=str, default="logs/log_train_results")
     parser.add_argument("--save-interval", type=int, default=200)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--resume-path", type=str, default=None, 
-                       help="Path to resume training from checkpoint")
-    parser.add_argument("--logger", type=str, default="tensorboard", 
-                       choices=["tensorboard", "wandb"])
+    parser.add_argument("--resume-path", type=str, default=None, help="Path to resume training from checkpoint")
+    parser.add_argument("--logger", type=str, default="tensorboard", choices=["tensorboard", "wandb"])
     
     return parser.parse_args()
-
 
 # ==================== 环境创建函数 ====================
 def make_px4_env(
@@ -254,45 +211,6 @@ def make_px4_env(
     )
     
     return env, train_envs, test_envs
-
-
-# ==================== 学习率调度函数 ====================
-def get_lr_lambda(total_epochs: int, decay_type: str = 'linear', min_lr_ratio: float = 0.0):
-    """
-    创建学习率衰减函数
-    
-    Args:
-        total_epochs: 总训练轮数
-        decay_type: 衰减类型
-        min_lr_ratio: 最小学习率比例
-    
-    Returns:
-        lambda函数用于LambdaLR
-    """
-    def linear_decay(epoch):
-        progress = epoch / total_epochs
-        return max(1.0 - progress * (1.0 - min_lr_ratio), min_lr_ratio)
-    
-    def cosine_decay(epoch):
-        import math
-        progress = epoch / total_epochs
-        cosine_factor = 0.5 * (1 + math.cos(math.pi * progress))
-        return min_lr_ratio + (1.0 - min_lr_ratio) * cosine_factor
-    
-    def exponential_decay(epoch):
-        import math
-        progress = epoch / total_epochs
-        exp_factor = math.exp(-5 * progress)
-        return min_lr_ratio + (1.0 - min_lr_ratio) * exp_factor
-    
-    if decay_type == 'linear':
-        return linear_decay
-    elif decay_type == 'cosine':
-        return cosine_decay
-    elif decay_type == 'exponential':
-        return exponential_decay
-    else:
-        return lambda epoch: 1.0
 
 
 # ==================== 主训练函数 ====================
@@ -374,41 +292,28 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
     # 优化器
     optim = torch.optim.Adam(actor_critic.parameters(), lr=args.lr, eps=1e-5)
     
-    # ==================== 调度器设置 ====================
+    # ✅ 学习率和梯度裁剪调度器
     lr_scheduler = None
     grad_norm_scheduler = None
     
-    # 学习率衰减
-    if args.lr_decay:
-        lr_lambda = get_lr_lambda(
-            total_epochs=args.epoch,
-            decay_type=args.lr_decay_type,
-            min_lr_ratio=args.min_lr_ratio
-        )
-        lr_scheduler = LambdaLR(optim, lr_lambda=lr_lambda)
+    if args.lr_decay or args.grad_norm_decay:
+        max_update_num = np.ceil(args.step_per_epoch / args.step_per_collect) * args.epoch
         
-        min_lr = args.lr * args.min_lr_ratio
-        print(f"✅ Learning rate decay enabled ({args.lr_decay_type}):")
-        print(f"   Initial LR: {args.lr:.2e}")
-        print(f"   Final LR: {min_lr:.2e}")
-        print(f"   Decay over: {args.epoch} epochs")
-    
-    # 梯度裁剪衰减
-    if args.grad_norm_decay and args.max_grad_norm != args.final_grad_norm:
-        grad_norm_scheduler = GradNormScheduler(
-            initial_norm=args.max_grad_norm,
-            final_norm=args.final_grad_norm,
-            total_epochs=args.epoch,
-            decay_type=args.grad_norm_decay_type
-        )
-        print(f"✅ Gradient norm decay enabled ({args.grad_norm_decay_type}):")
-        print(f"   Initial norm: {args.max_grad_norm:.4f}")
-        print(f"   Final norm: {args.final_grad_norm:.4f}")
-        print(f"   Decay over: {args.epoch} epochs")
-    elif args.grad_norm_decay:
-        print(f"⚠️  Gradient norm decay disabled (max_grad_norm == final_grad_norm = {args.max_grad_norm})")
-    else:
-        print(f"📌 Fixed gradient clipping norm: {args.max_grad_norm:.4f}")
+        # 学习率衰减
+        if args.lr_decay:
+            lr_scheduler = LambdaLR(optim, lr_lambda=lambda epoch: 1 - epoch / max_update_num)
+            print(f"✅ Learning rate decay enabled: {args.lr:.2e} → 0 over {max_update_num} updates")
+        
+        # 梯度裁剪衰减
+        if args.grad_norm_decay:
+            grad_norm_scheduler = GradNormScheduler(
+                initial_norm=args.max_grad_norm,
+                final_norm=args.final_grad_norm,
+                total_steps=max_update_num,
+                decay_type=args.grad_norm_decay_type
+            )
+            print(f"✅ Gradient norm decay enabled: {args.max_grad_norm} → {args.final_grad_norm} "
+                  f"over {max_update_num} updates ({args.grad_norm_decay_type})")
 
     # 分布函数
     def dist(loc_scale: tuple[torch.Tensor, torch.Tensor]) -> Distribution:
@@ -441,7 +346,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
     # 加载checkpoint/最优模型继续训练
     start_epoch = 0
     if args.resume_path:
-        print(f"📂 Loading model from: {args.resume_path}")
+        print(f"Loading model from: {args.resume_path}")
         ckpt = torch.load(args.resume_path, map_location=args.device, weights_only=False)
         policy.load_state_dict(ckpt["model"])
         
@@ -450,20 +355,11 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             optim.load_state_dict(ckpt["optim"])
             start_epoch = ckpt.get("epoch", 0)
             
-            # 恢复学习率调度器
-            if lr_scheduler and "lr_scheduler" in ckpt:
-                lr_scheduler.load_state_dict(ckpt["lr_scheduler"])
-                print(f"   ✅ Restored LR scheduler state")
-            
-            # 恢复梯度裁剪调度器
+            # ✅ 恢复梯度裁剪调度器状态
             if grad_norm_scheduler and "grad_norm_scheduler" in ckpt:
                 grad_norm_scheduler.load_state_dict(ckpt["grad_norm_scheduler"])
-                print(f"   ✅ Restored gradient norm scheduler state")
             
             print(f"✅ Resumed from checkpoint at epoch {start_epoch}")
-            print(f"   Current LR: {optim.param_groups[0]['lr']:.2e}")
-            if grad_norm_scheduler:
-                print(f"   Current grad norm: {grad_norm_scheduler.get_norm():.4f}")
         else:
             print(f"✅ Loaded best model for fine-tuning")
     
@@ -474,8 +370,8 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         buffer = ReplayBuffer(args.buffer_size)
     
     # 创建收集器
-    train_collector = Collector[CollectStats](policy, train_envs, buffer, exploration_noise=True)
-    test_collector = Collector[CollectStats](policy, test_envs)
+    train_collector = Collector[CollectStats](policy,train_envs,buffer,exploration_noise=True)
+    test_collector = Collector[CollectStats](policy,test_envs)
 
     # 设置日志
     now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
@@ -498,6 +394,9 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
     with open(os.path.join(log_path, "config.json"), 'w') as f:
         json.dump(vars(args), f, indent=4, cls=NumpyEncoder)
 
+    # 当前epoch追踪
+    current_epoch = {"value": start_epoch}
+
     # 保存函数
     def save_best_fn(policy: BasePolicy) -> None:
         best_path = os.path.join(log_path, "best_policy.pth")
@@ -505,31 +404,33 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         print(f"💾 Best policy saved")
     
     def save_checkpoint_fn(epoch: int, env_step: int, gradient_step: int) -> None:
-        """在每个epoch结束时调用，更新所有调度器"""
+        # 更新当前epoch
+        current_epoch["value"] = epoch
         
-        # ==================== 更新梯度裁剪范数 ====================
+        # 更新梯度裁剪范数
         if grad_norm_scheduler is not None:
-            current_grad_norm = grad_norm_scheduler.get_norm(epoch)
+            current_grad_norm = grad_norm_scheduler.get_norm()
             policy._max_grad_norm = current_grad_norm
-            grad_norm_scheduler.step()  # epoch + 1
             
-            # 记录到日志
+            # 记录到TensorBoard（注意：第三个参数是global_step，不是step）
             if hasattr(exp_logger, 'writer'):
-                exp_logger.writer.add_scalar("train/grad_norm", current_grad_norm, epoch)
+                exp_logger.writer.add_scalar("train/grad_norm", current_grad_norm, gradient_step)
+            
+            grad_norm_scheduler.step()
         
-        # ==================== 记录学习率 ====================
+        # 记录学习率
         if lr_scheduler is not None:
             current_lr = optim.param_groups[0]['lr']
             if hasattr(exp_logger, 'writer'):
-                exp_logger.writer.add_scalar("train/learning_rate", current_lr, epoch)
+                exp_logger.writer.add_scalar("train/learning_rate", current_lr, gradient_step)
         
-        # ==================== 更新姿态阈值 ====================
+        # 更新姿态阈值
         if hasattr(train_envs, 'env_method'):
             train_envs.env_method('update_attitude_bound', epoch)
         if hasattr(test_envs, 'env_method'):
             test_envs.env_method('update_attitude_bound', epoch)
         
-        # ==================== 保存checkpoint ====================
+        # 保存checkpoint
         if epoch % args.save_interval == 0 or epoch == args.epoch:
             ckpt_path = os.path.join(log_path, f"checkpoint_epoch{epoch}.pth")
             ckpt_data = {
@@ -541,10 +442,6 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
                 "args": vars(args),
             }
             
-            # 保存学习率调度器状态
-            if lr_scheduler is not None:
-                ckpt_data["lr_scheduler"] = lr_scheduler.state_dict()
-            
             # 保存梯度裁剪调度器状态
             if grad_norm_scheduler is not None:
                 ckpt_data["grad_norm_scheduler"] = grad_norm_scheduler.state_dict()
@@ -552,19 +449,11 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             torch.save(ckpt_data, ckpt_path)
             
             # 打印状态信息
-            print(f"\n{'='*60}")
-            print(f"💾 Checkpoint saved: epoch {epoch}/{args.epoch}")
-            print(f"   📊 Environment steps: {env_step:,}")
-            print(f"   📊 Gradient steps: {gradient_step:,}")
-            
-            if lr_scheduler is not None:
-                current_lr = optim.param_groups[0]['lr']
-                print(f"   📊 Current learning rate: {current_lr:.2e}")
-            
+            print(f"💾 Checkpoint saved: epoch {epoch}")
             if grad_norm_scheduler is not None:
-                print(f"   📊 Current grad norm: {policy._max_grad_norm:.4f}")
-            
-            print(f"{'='*60}\n")
+                print(f"   📊 Current grad_norm: {current_grad_norm:.4f}")
+            if lr_scheduler is not None:
+                print(f"   📊 Current lr: {current_lr:.2e}")
 
     # 训练
     trainer = OnpolicyTrainer(
@@ -584,31 +473,12 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         verbose=True,
     )
     
-    # 打印训练配置摘要
-    print("\n" + "="*60)
-    print("🚀 Training Configuration Summary")
-    print("="*60)
-    print(f"📦 Environment: {args.control_type} (trajectory {args.trajectory_type})")
-    print(f"🎯 Total epochs: {args.epoch}")
-    print(f"🔄 Steps per epoch: {args.step_per_epoch:,}")
-    print(f"🎲 Training envs: {args.training_num}")
-    print(f"🧪 Test envs: {args.test_num}")
-    print(f"🧠 Network: {args.hidden_sizes}")
-    print(f"📊 Initial learning rate: {args.lr:.2e}")
-    
-    if args.lr_decay:
-        min_lr = args.lr * args.min_lr_ratio
-        print(f"   └─ Decays to: {min_lr:.2e} ({args.lr_decay_type})")
-    
-    print(f"✂️  Gradient clipping: {args.max_grad_norm:.4f}")
-    
+    print("🚀 Starting training...")
+    print(f"📊 Initial max_grad_norm: {args.max_grad_norm}")
     if grad_norm_scheduler:
-        print(f"   └─ Decays to: {args.final_grad_norm:.4f} ({args.grad_norm_decay_type})")
-    
-    print("="*60 + "\n")
+        print(f"📊 Final max_grad_norm: {args.final_grad_norm}")
 
-    # 开始训练
-    print("🚀 Starting training...\n")
+    # 使用标准的 trainer.run()
     result = trainer.run()
     
     pprint.pprint(result)
@@ -620,12 +490,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         "args": vars(args),
         "result": result,
     }, final_path)
-    
-    print(f"\n{'='*60}")
-    print(f"✅ Training completed!")
-    print(f"💾 Final model saved: {final_path}")
-    print(f"📊 Best model: {os.path.join(log_path, 'best_policy.pth')}")
-    print(f"{'='*60}\n")
+    print(f"✅ Training completed! Final model: {final_path}")
 
 
 if __name__ == "__main__":

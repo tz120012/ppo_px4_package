@@ -69,7 +69,7 @@ class QuadcopterEnv(gym.Env):
 
         # ==================== 动作空间模式（直接式 vs 增量式） ====================
         self.enable_smooth_transition = False
-        self.alpha = 0.1
+        self.alpha = 0.3    # 平滑过渡系数（仅在enable_smooth_transition=True时生效）
         
         # 奖励缩放因子
         self.reward_scale = 0.1

@@ -60,9 +60,9 @@ class Trajectory:
     轨迹类型编码 (xyzType):
         速度跟踪轨迹 (100-199):
             *** 新拆分轨迹 ***
-            1001: 俯仰轴阶跃测试 (30秒)
+            * 1001: 俯仰轴阶跃测试 (30秒)
             1002: 滚转轴阶跃测试 (30秒)
-            * 1003: 俯仰-滚转耦合阶跃测试 (30秒)
+            1003: 俯仰-滚转耦合阶跃测试 (30秒)
             1011: 正弦扫频扫幅 - 低频段 (30秒)
             * 1012: 正弦扫频扫幅 - 高频段 (30秒)
             
@@ -99,6 +99,7 @@ class Trajectory:
             trajSelect: [xyzType, yawType, averVel]
         """
         # ========== 基本配置 ==========
+        self.quad = quad  # 保存 quad 引用
         self.ctrlType = ctrlType
         self.xyzType = trajSelect[0]
         self.yawType = trajSelect[1]
@@ -140,10 +141,32 @@ class Trajectory:
             self.desEul, self.desPQR, self.desYawRate
         )).astype(float)
 
+
+        # ========== 添加速度限制配置 ==========
+        self.max_velocity_xy = 15.0  # m/s (XY平面最大速度)
+        self.max_velocity_z = 5.0    # m/s (垂直最大速度)
+        self.max_velocity_total = 15.0  # m/s (总速度限制)
+
     # ========================================================================
     # 初始化方法
     # ========================================================================
     
+    def _limit_velocity(self, vel):
+        """限制速度到安全范围"""
+        vel_limited = vel.copy()
+        
+        # 分轴限制
+        vel_limited[0] = np.clip(vel[0], -self.max_velocity_xy, self.max_velocity_xy)
+        vel_limited[1] = np.clip(vel[1], -self.max_velocity_xy, self.max_velocity_xy)
+        vel_limited[2] = np.clip(vel[2], -self.max_velocity_z, self.max_velocity_z)
+        
+        # 总速度限制
+        vel_mag = np.linalg.norm(vel_limited)
+        if vel_mag > self.max_velocity_total:
+            vel_limited = vel_limited * (self.max_velocity_total / vel_mag)
+        
+        return vel_limited
+
     def _init_velocity_trajectories(self):
         """初始化速度跟踪轨迹参数"""
         
@@ -163,9 +186,9 @@ class Trajectory:
         elif self.xyzType in [1011, 1012]:
             # 正弦扫频扫幅 - 拆分版（各30秒）
             self.vel_amplitude_min = 3.0
-            self.vel_amplitude_max = 10.0
+            self.vel_amplitude_max = 15.0
             self.vel_amplitude_period = 30.0
-            self.vel_axis_ratio = np.array([0.6, 0.5, 0.3])
+            self.vel_axis_ratio = np.array([1.0, 0.0, 0.0])
             self.vel_phase = np.array([0, pi/3, 2*pi/3])
             
             if self.xyzType == 1011:
@@ -175,8 +198,8 @@ class Trajectory:
                 self.vel_freq_period = 30.0
             else:  # 1012
                 # 高频段：0.055 - 0.1 Hz
-                self.vel_freq_min = 0.055
-                self.vel_freq_max = 0.1
+                self.vel_freq_min = 0.1
+                self.vel_freq_max = 0.3
                 self.vel_freq_period = 30.0
         
         # ==================== 原有轨迹参数（保留兼容性） ====================
@@ -300,11 +323,26 @@ class Trajectory:
         
         elif self.xyzType == 206:
             # 3D李萨如
-            self.lissajous_amp = np.array([5.0, 4.0, 1.5])
-            self.lissajous_freq = np.array([1.0, 2.0, 3.0])
-            self.lissajous_phase = np.array([0, pi/3, pi/2])
-            self.lissajous_center = np.array([0., 0., 2.5])
+            # self.lissajous_amp = np.array([5.0, 4.0, 1.5])
+            self.lissajous_amp = np.array([20.0, 8.0, 3.0])
+            self.lissajous_freq = np.array([2, 3, 3])
+            # self.lissajous_phase = np.array([-pi/2, pi/2, 0])
+            self.lissajous_center = np.array([0., 0., 10.0])
         
+            # 根据四旋翼初始位置计算相位偏移，使得 t=0 时轨迹经过初始位置
+            init_offset = self.quad.pos - self.lissajous_center  # 使用 self.quad
+            self.lissajous_phase = np.zeros(3)
+            
+            for i in range(3):
+                if abs(self.lissajous_amp[i]) > 1e-6:
+                    # 从位置反算相位：pos[i] = center[i] + amp[i]*sin(phase[i])
+                    # 因此：sin(phase[i]) = (pos[i] - center[i]) / amp[i]
+                    sin_val = np.clip(init_offset[i] / self.lissajous_amp[i], -1.0, 1.0)
+                    self.lissajous_phase[i] = np.arcsin(sin_val)
+                else:
+                    self.lissajous_phase[i] = 0.0
+
+
         elif self.xyzType == 207:
             # 随机多项式轨迹
             np.random.seed(456)
@@ -330,29 +368,29 @@ class Trajectory:
     # ========================================================================
     
     def _vel_pitch_only_step(self, t):
-        """xyzType=1001: 俯仰轴阶跃测试（30秒）"""
+        """xyzType=1001: 俯仰轴阶跃测试（循环，不再仅限 30s）"""
         desVel = np.zeros(3)
-        idx = int(t // self.step_duration)
-        if idx >= self.num_steps:
+        if self.num_steps == 0 or self.step_duration <= 0:
             return desVel
+        idx = int(t // self.step_duration) % self.num_steps
         desVel[0] = float(self.step_sequence[idx])
         return desVel
     
     def _vel_roll_only_step(self, t):
-        """xyzType=1002: 滚转轴阶跃测试（30秒）"""
+        """xyzType=1002: 滚转轴阶跃测试（循环，不再仅限 30s）"""
         desVel = np.zeros(3)
-        idx = int(t // self.step_duration)
-        if idx >= self.num_steps:
+        if self.num_steps == 0 or self.step_duration <= 0:
             return desVel
+        idx = int(t // self.step_duration) % self.num_steps
         desVel[1] = float(self.step_sequence[idx])
         return desVel
     
     def _vel_coupled_step(self, t):
-        """xyzType=1003: 俯仰-滚转耦合阶跃测试（30秒）"""
+        """xyzType=1003: 俯仰-滚转耦合阶跃测试（循环，不再仅限 30s）"""
         desVel = np.zeros(3)
-        idx = int(t // self.step_duration)
-        if idx >= self.num_steps:
+        if self.num_steps == 0 or self.step_duration <= 0:
             return desVel
+        idx = int(t // self.step_duration) % self.num_steps
         v = float(self.step_sequence[idx])
         desVel[0] = v
         desVel[1] = v * self.roll_pitch_ratio
@@ -789,7 +827,7 @@ class Trajectory:
                 self._yaw_follow_velocity(t, Ts, quad)
             elif self.yawType == 0 or self.yawType == 4:
                 self.desEul[2] = 0.0
-        
+        self.desVel = self._limit_velocity(self.desVel)
         # 组装状态向量
         self.sDes = np.hstack((
             self.desPos, self.desVel, self.desAcc, self.desThr,
