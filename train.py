@@ -136,7 +136,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=1012)
     parser.add_argument("--buffer-size", type=int, default=4096)
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])
-    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--epoch", type=int, default=1000)
     parser.add_argument("--step-per-epoch", type=int, default=30000)
@@ -164,7 +164,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--lr-decay-type", type=str, default="linear",
                        choices=["linear", "cosine", "exponential"],
                        help="Learning rate decay type")
-    parser.add_argument("--min-lr-ratio", type=float, default=0.1,
+    parser.add_argument("--min-lr-ratio", type=float, default=0.6,
                        help="Minimum learning rate ratio (0.0 = decay to 0, 0.1 = decay to 10%)")
 
     # 梯度裁剪衰减参数
