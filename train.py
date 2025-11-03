@@ -173,7 +173,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--grad-norm-decay-type", type=str, default="linear",
                        choices=["linear", "cosine", "exponential"],
                        help="Gradient norm decay type")
-    parser.add_argument("--max-grad-norm", type=float, default=0.5,
+    parser.add_argument("--max-grad-norm", type=float, default=0.9,
                        help="Initial gradient clipping norm")
     parser.add_argument("--final-grad-norm", type=float, default=0.1,
                        help="Final gradient clipping norm (no decay if equal to max-grad-norm)")
@@ -181,7 +181,7 @@ def get_args() -> argparse.Namespace:
     # 姿态越界阈值课程学习参数
     parser.add_argument("--attitude-bound-start", type=float, default=90.0,
                        help="Initial attitude bound threshold (degrees)")
-    parser.add_argument("--attitude-bound-end", type=float, default=60.0,
+    parser.add_argument("--attitude-bound-end", type=float, default=80.0,
                        help="Final attitude bound threshold (degrees)")
     parser.add_argument("--attitude-bound-decay-epochs", type=int, default=1000,
                        help="Number of epochs to decay from start to end threshold")

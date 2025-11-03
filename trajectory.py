@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 """
 四旋翼轨迹生成器 - 重构版
@@ -186,22 +185,27 @@ class Trajectory:
         elif self.xyzType in [1011, 1012]:
             # 正弦扫频扫幅 - 拆分版（各30秒）
             self.vel_amplitude_min = 3.0
-            self.vel_amplitude_max = 15.0
+            self.vel_amplitude_max = 12.0
             self.vel_amplitude_period = 30.0
             self.vel_axis_ratio = np.array([1.0, 0.0, 0.0])
             self.vel_phase = np.array([0, pi/3, 2*pi/3])
-            
+            # 确保对 1012 使用 0.05 - 0.2 Hz，并引入参考时间以保证周期性（30s）与不随全局时间累增
             if self.xyzType == 1011:
                 # 低频段：0.01 - 0.055 Hz
                 self.vel_freq_min = 0.01
                 self.vel_freq_max = 0.055
                 self.vel_freq_period = 30.0
             else:  # 1012
-                # 高频段：0.055 - 0.1 Hz
+                # 高频段：固定为 0.05 - 0.3 Hz，周期 30s（以相对时间为基准）
                 self.vel_freq_min = 0.1
                 self.vel_freq_max = 0.3
                 self.vel_freq_period = 30.0
-        
+            # 参考时间：首次计算时记录，之后所有扫频以相对时间 (t - ref) 为基础
+            self._sine_sweep_ref_time = None
+            # 累积相位，用于正确计算正弦波
+            self._sine_sweep_phase_accum = 0.0
+            self._sine_sweep_last_t = None
+
         # ==================== 原有轨迹参数（保留兼容性） ====================
         elif self.xyzType == 100:
             # 原完整版（90秒）
@@ -405,27 +409,48 @@ class Trajectory:
         return self._vel_sine_sweep_generic(t)
     
     def _vel_sine_sweep_generic(self, t):
-        """正弦扫频扫幅通用实现"""
+        """正弦扫频扫幅通用实现（基于相对时间，保证周期性）"""
         desVel = np.zeros(3)
         desAcc = np.zeros(3)
         
-        # 幅值扫描（三角波）
-        amp_ratio = np.abs((t % self.vel_amplitude_period) / self.vel_amplitude_period * 2 - 1)
+        # 若未设置参考时间，则以首次调用时的 t 作为起点
+        if hasattr(self, "_sine_sweep_ref_time") and self._sine_sweep_ref_time is None:
+            self._sine_sweep_ref_time = t
+            self._sine_sweep_last_t = t
+            self._sine_sweep_phase_accum = 0.0
+        # 如果没有该属性（向下兼容），直接使用全局 t
+        tt = t if not hasattr(self, "_sine_sweep_ref_time") else (t - self._sine_sweep_ref_time)
+        if tt < 0:
+            # 保证非负
+            tt = 0.0
+        
+        # 计算时间步长（用于相位累积）
+        if hasattr(self, "_sine_sweep_last_t") and self._sine_sweep_last_t is not None:
+            dt = t - self._sine_sweep_last_t
+        else:
+            dt = 0.0
+        self._sine_sweep_last_t = t
+        
+        # 幅值扫描（三角波） 使用相对时间 tt
+        amp_ratio = np.abs((tt % self.vel_amplitude_period) / self.vel_amplitude_period * 2 - 1)
         current_amp = self.vel_amplitude_min + (self.vel_amplitude_max - self.vel_amplitude_min) * amp_ratio
         
-        # 频率扫描（线性）
-        freq_ratio = (t % self.vel_freq_period) / self.vel_freq_period
+        # 频率扫描（线性） 使用相对时间 tt，确保每 self.vel_freq_period 为一个周期
+        freq_ratio = (tt % self.vel_freq_period) / self.vel_freq_period
         current_freq = self.vel_freq_min + (self.vel_freq_max - self.vel_freq_min) * freq_ratio
         omega = 2 * pi * current_freq
+        
+        # 累积相位（积分频率）
+        self._sine_sweep_phase_accum += omega * dt
         
         # 归一化
         norm_factor = np.sqrt(np.sum(self.vel_axis_ratio**2))
         
-        # 各轴分解
+        # 各轴分解 - 使用累积相位而非 omega * tt
         for i in range(3):
             ratio_norm = self.vel_axis_ratio[i] / norm_factor
-            desVel[i] = current_amp * ratio_norm * np.sin(omega * t + self.vel_phase[i])
-            desAcc[i] = current_amp * ratio_norm * omega * np.cos(omega * t + self.vel_phase[i])
+            desVel[i] = current_amp * ratio_norm * np.sin(self._sine_sweep_phase_accum + self.vel_phase[i])
+            desAcc[i] = current_amp * ratio_norm * omega * np.cos(self._sine_sweep_phase_accum + self.vel_phase[i])
         
         return desVel, desAcc
 
