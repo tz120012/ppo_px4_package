@@ -65,7 +65,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--epoch", type=int, default=1000)
+    parser.add_argument("--epoch", type=int, default=2000)
     parser.add_argument("--step-per-epoch", type=int, default=6000)
     parser.add_argument("--step-per-collect", type=int, default=2048)
     parser.add_argument("--repeat-per-collect", type=int, default=10)
@@ -313,13 +313,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
 
     # ==================== 设置日志 ====================
     now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
-    args.algo_name = "ppo"
-    log_name = os.path.join(
-        f"{args.control_type}_traj{args.trajectory_type}", 
-        args.algo_name, 
-        str(args.seed), 
-        now
-    )
+    log_name = os.path.join(str(args.seed), now)
     log_path = os.path.join(args.logdir, log_name)
     
     # logger
