@@ -46,7 +46,7 @@ class QuadcopterEnv(gym.Env):
                  wind_strength: float = 0.0,
                  #  姿态越界阈值课程学习参数
                  attitude_bound_start: float = 90.0,
-                 attitude_bound_end: float = 60.0,
+                 attitude_bound_end: float = 80.0,
                  attitude_bound_decay_epochs: int = 1000,
                  compat_truncated_as_done: bool = True,
             ):
@@ -73,7 +73,7 @@ class QuadcopterEnv(gym.Env):
         
         # 奖励缩放因子
         self.reward_scale = 0.1
-        self.failure_penalty = -100000.0   
+        self.failure_penalty = -200000.0   
 
         #  子步改进相关参数
         self.compat_truncated_as_done = bool(compat_truncated_as_done)

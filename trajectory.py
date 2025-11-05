@@ -185,7 +185,7 @@ class Trajectory:
         elif self.xyzType in [1011, 1012]:
             # 正弦扫频扫幅 - 拆分版（各30秒）
             self.vel_amplitude_min = 3.0
-            self.vel_amplitude_max = 12.0
+            self.vel_amplitude_max = 15.0
             self.vel_amplitude_period = 30.0
             self.vel_axis_ratio = np.array([1.0, 0.0, 0.0])
             self.vel_phase = np.array([0, pi/3, 2*pi/3])
@@ -325,27 +325,109 @@ class Trajectory:
             self.helix_initial_height = 1.0
             self.helix_max_height = 5.0
         
+        # elif self.xyzType == 206:
+        #     # 3D李萨如
+        #     # self.lissajous_amp = np.array([5.0, 4.0, 1.5])
+        #     self.lissajous_amp = np.array([20.0, 8.0, 3.0])
+        #     self.lissajous_freq = np.array([2, 3, 3])
+        #     # self.lissajous_phase = np.array([-pi/2, pi/2, 0])
+        #     self.lissajous_center = np.array([0., 0., 10.0])
+        
+        #     # 根据四旋翼初始位置计算相位偏移，使得 t=0 时轨迹经过初始位置
+        #     init_offset = self.quad.pos - self.lissajous_center  # 使用 self.quad
+        #     self.lissajous_phase = np.zeros(3)
+            
+        #     for i in range(3):
+        #         if abs(self.lissajous_amp[i]) > 1e-6:
+        #             # 从位置反算相位：pos[i] = center[i] + amp[i]*sin(phase[i])
+        #             # 因此：sin(phase[i]) = (pos[i] - center[i]) / amp[i]
+        #             sin_val = np.clip(init_offset[i] / self.lissajous_amp[i], -1.0, 1.0)
+        #             self.lissajous_phase[i] = np.arcsin(sin_val)
+        #         else:
+        #             self.lissajous_phase[i] = 0.0
+
         elif self.xyzType == 206:
             # 3D李萨如
-            # self.lissajous_amp = np.array([5.0, 4.0, 1.5])
             self.lissajous_amp = np.array([20.0, 8.0, 3.0])
             self.lissajous_freq = np.array([2, 3, 3])
-            # self.lissajous_phase = np.array([-pi/2, pi/2, 0])
             self.lissajous_center = np.array([0., 0., 10.0])
-        
-            # 根据四旋翼初始位置计算相位偏移，使得 t=0 时轨迹经过初始位置
-            init_offset = self.quad.pos - self.lissajous_center  # 使用 self.quad
+
+            # 方案1: 根据初始位置调整轨迹中心（推荐）
+            # 如果无人机初始Z位置与轨迹中心差距过大，自动调整中心
+            init_offset = self.quad.pos - self.lissajous_center
+            if abs(init_offset[2]) > self.lissajous_amp[2]:
+                # Z轴偏移超出振幅范围，调整中心高度以包含初始位置
+                self.lissajous_center[2] = self.quad.pos[2]
+                print(f"[Trajectory 206] 警告: 初始Z={self.quad.pos[2]:.2f}m 超出范围，"
+                    f"已调整轨迹中心Z至 {self.lissajous_center[2]:.2f}m")
+                init_offset = self.quad.pos - self.lissajous_center
+            
             self.lissajous_phase = np.zeros(3)
             
             for i in range(3):
                 if abs(self.lissajous_amp[i]) > 1e-6:
-                    # 从位置反算相位：pos[i] = center[i] + amp[i]*sin(phase[i])
-                    # 因此：sin(phase[i]) = (pos[i] - center[i]) / amp[i]
-                    sin_val = np.clip(init_offset[i] / self.lissajous_amp[i], -1.0, 1.0)
+                    # 计算归一化偏移
+                    normalized_offset = init_offset[i] / self.lissajous_amp[i]
+                    
+                    # 检查是否在有效范围内
+                    if abs(normalized_offset) > 1.0:
+                        print(f"[Trajectory 206] 警告: 轴{i} 偏移 {init_offset[i]:.2f}m "
+                            f"超出振幅 {self.lissajous_amp[i]:.2f}m")
+                        # 将无人机位置投影到轨迹边界
+                        normalized_offset = np.clip(normalized_offset, -1.0, 1.0)
+                    
+                    # 从位置反算相位
+                    sin_val = normalized_offset
                     self.lissajous_phase[i] = np.arcsin(sin_val)
+                    
+                    # 选择使初始速度方向合理的相位
+                    omega = 2 * pi * self.lissajous_freq[i] / 20.0
+                    
+                    # 计算两个可能的相位
+                    phase_1 = self.lissajous_phase[i]
+                    phase_2 = pi - self.lissajous_phase[i]
+                    
+                    # 计算对应的初始速度
+                    vel_1 = self.lissajous_amp[i] * omega * np.cos(phase_1)
+                    vel_2 = self.lissajous_amp[i] * omega * np.cos(phase_2)
+                    
+                    # 选择速度更大的方向（使轨迹更流畅）
+                    if hasattr(self.quad, 'vel') and np.linalg.norm(self.quad.vel) > 0.1:
+                        # 如果有初始速度，选择与速度方向一致的相位
+                        if abs(vel_1 - self.quad.vel[i]) < abs(vel_2 - self.quad.vel[i]):
+                            self.lissajous_phase[i] = phase_1
+                        else:
+                            self.lissajous_phase[i] = phase_2
+                    else:
+                        # 选择绝对值更大的速度（更激进的运动）
+                        if abs(vel_1) > abs(vel_2):
+                            self.lissajous_phase[i] = phase_1
+                        else:
+                            self.lissajous_phase[i] = phase_2
                 else:
                     self.lissajous_phase[i] = 0.0
-
+            
+            # 打印初始化信息
+            print(f"[Trajectory 206] 3D李萨如轨迹初始化:")
+            print(f"  初始位置: {self.quad.pos}")
+            print(f"  轨迹中心: {self.lissajous_center}")
+            print(f"  振幅: {self.lissajous_amp}")
+            print(f"  位置偏移: {init_offset}")
+            print(f"  归一化偏移: {init_offset / self.lissajous_amp}")
+            print(f"  计算相位: {self.lissajous_phase * 180/pi} 度")
+            
+            # 验证：计算 t=0 时的期望位置
+            verify_pos = self.lissajous_center + self.lissajous_amp * np.sin(self.lissajous_phase)
+            print(f"  验证位置: {verify_pos}")
+            print(f"  位置误差: {np.linalg.norm(verify_pos - self.quad.pos):.6f} m")
+            
+            # 计算并显示初始速度
+            verify_vel = np.zeros(3)
+            for i in range(3):
+                omega = 2 * pi * self.lissajous_freq[i] / 20.0
+                verify_vel[i] = self.lissajous_amp[i] * omega * np.cos(self.lissajous_phase[i])
+            print(f"  初始速度: {verify_vel}")
+            print(f"  速度幅值: {np.linalg.norm(verify_vel):.2f} m/s")
 
         elif self.xyzType == 207:
             # 随机多项式轨迹

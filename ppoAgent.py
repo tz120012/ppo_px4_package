@@ -11,7 +11,7 @@ import socket
 import struct
 
 # ============ 配置 ============
-ACTOR_PATH = "./logs/log_train_results/1012/251103-174304/best_policy.pth"
+ACTOR_PATH = "./logs/log_train_results/1012/251105-113835/best_policy.pth"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 LOCAL_IP = '127.0.0.1'
@@ -46,10 +46,15 @@ class Actor(nn.Module):
 # ============ 加载模型 ============
 print("正在加载模型...")
 checkpoint = torch.load(ACTOR_PATH, map_location=DEVICE)
-args = checkpoint['args']
-state_dict = checkpoint['model']
+args = checkpoint.get('args', None) if isinstance(checkpoint, dict) else None
+state_dict = (checkpoint.get('model') or checkpoint.get('state_dict') if isinstance(checkpoint, dict) else checkpoint)
 
-actor = Actor(args['state_shape'][0], args['action_shape'][0], args['hidden_sizes'])
+if args is not None:
+    obs_dim = int(args['state_shape'][0]); act_dim = int(args['action_shape'][0])
+    hidden = list(args.get('hidden_sizes', [128, 128]))
+else:
+    obs_dim, act_dim, hidden = OBS_DIM, ACTION_DIM, [128, 128]
+actor = Actor(obs_dim, act_dim, hidden)
 
 # 映射键名
 actor_dict = {}
