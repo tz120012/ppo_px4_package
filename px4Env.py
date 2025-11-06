@@ -73,7 +73,7 @@ class QuadcopterEnv(gym.Env):
         
         # 奖励缩放因子
         self.reward_scale = 0.1
-        self.failure_penalty = -200000.0   
+        self.failure_penalty = -300000.0   
 
         #  子步改进相关参数
         self.compat_truncated_as_done = bool(compat_truncated_as_done)
@@ -82,8 +82,8 @@ class QuadcopterEnv(gym.Env):
         if self.control_type == "xyz_pos":
             pos_weight_xy = 3.0
             pos_weight_z = 2.0
-            vel_weight_xy = 0.5
-            vel_weight_z = 0.3
+            vel_weight_xy = 5
+            vel_weight_z = 3
         elif self.control_type == "xy_vel_z_pos":
             pos_weight_xy = 0.0
             pos_weight_z = 2.0
@@ -98,8 +98,8 @@ class QuadcopterEnv(gym.Env):
             log.warning(f" Unknown control_type: {self.control_type}, using default weights")
             pos_weight_xy = 0.0
             pos_weight_z = 0.0
-            vel_weight_xy = 5.0
-            vel_weight_z = 3.0
+            vel_weight_xy = 15.0
+            vel_weight_z = 10.0
 
         # 🔄 修改：降低速度/姿态权重（单步误差波动更大）
         self.segment_weights = dict(

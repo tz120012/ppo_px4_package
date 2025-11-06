@@ -328,10 +328,10 @@ def main():
     trajSelect = np.zeros(3)
 
     # 选择控制类型 (0: xyz_pos, 1: xy_vel_z_pos, 2: xyz_vel)
-    ctrlType = ctrlOptions[2]
+    ctrlType = ctrlOptions[0]
     
     # Select Position Trajectory Type
-    trajSelect[0] = 1012
+    trajSelect[0] = 206
 
     # Select Yaw Trajectory Type
     trajSelect[1] = 3
