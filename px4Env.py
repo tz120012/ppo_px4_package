@@ -80,10 +80,10 @@ class QuadcopterEnv(gym.Env):
         
         #  根据控制模式自动调整位置和速度权重
         if self.control_type == "xyz_pos":
-            pos_weight_xy = 10.0
-            pos_weight_z = 10.0
-            vel_weight_xy = 8
-            vel_weight_z = 8
+            pos_weight_xy = 5.0
+            pos_weight_z = 5.0
+            vel_weight_xy = 10
+            vel_weight_z = 10
         elif self.control_type == "xy_vel_z_pos":
             pos_weight_xy = 0.0
             pos_weight_z = 2.0
@@ -93,12 +93,12 @@ class QuadcopterEnv(gym.Env):
             pos_weight_xy = 0.0
             pos_weight_z = 0.0
             vel_weight_xy = 10.0
-            vel_weight_z = 6.0
+            vel_weight_z = 10.0
         else:
             log.warning(f" Unknown control_type: {self.control_type}, using default weights")
             pos_weight_xy = 0.0
             pos_weight_z = 0.0
-            vel_weight_xy = 15.0
+            vel_weight_xy = 10.0
             vel_weight_z = 10.0
 
         # 🔄 修改：降低速度/姿态权重（单步误差波动更大）
@@ -108,8 +108,8 @@ class QuadcopterEnv(gym.Env):
             W_pos_z=pos_weight_z,
             W_vel_xy=vel_weight_xy ,    
             W_vel_z=vel_weight_z ,      
-            W_att=10.0,                       
-            W_omega=8.0,                      
+            W_att=15.0,                       
+            W_omega=20.0,                      
             
             # 惩罚项
             W_u=0.0,
