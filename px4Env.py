@@ -72,18 +72,18 @@ class QuadcopterEnv(gym.Env):
         self.alpha = 0.3    # 平滑过渡系数（仅在enable_smooth_transition=True时生效）
         
         # 奖励缩放因子
-        self.reward_scale = 0.1
-        self.failure_penalty = -300000.0   
+        self.reward_scale = 0.01
+        self.failure_penalty = -500000.0   
 
         #  子步改进相关参数
         self.compat_truncated_as_done = bool(compat_truncated_as_done)
         
         #  根据控制模式自动调整位置和速度权重
         if self.control_type == "xyz_pos":
-            pos_weight_xy = 3.0
-            pos_weight_z = 2.0
-            vel_weight_xy = 5
-            vel_weight_z = 3
+            pos_weight_xy = 10.0
+            pos_weight_z = 10.0
+            vel_weight_xy = 8
+            vel_weight_z = 8
         elif self.control_type == "xy_vel_z_pos":
             pos_weight_xy = 0.0
             pos_weight_z = 2.0
@@ -108,7 +108,7 @@ class QuadcopterEnv(gym.Env):
             W_pos_z=pos_weight_z,
             W_vel_xy=vel_weight_xy ,    
             W_vel_z=vel_weight_z ,      
-            W_att=50.0,                       
+            W_att=10.0,                       
             W_omega=8.0,                      
             
             # 惩罚项
@@ -117,7 +117,7 @@ class QuadcopterEnv(gym.Env):
             W_domega=0.0,
             W_du=0.0,
             W_sat=0.0,
-            W_over=20.0,
+            W_over=30.0,
         )
 
         # ==================== 限制与判据 ====================

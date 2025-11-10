@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 PX4四旋翼PID参数优化PPO训练脚本
@@ -16,7 +15,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.distributions import Distribution, Independent, Normal
-from torch.optim.lr_scheduler import LambdaLR
+from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR
 
 from tianshou.data import Collector, CollectStats, ReplayBuffer, VectorReplayBuffer
 from tianshou.env import DummyVectorEnv, SubprocVectorEnv
@@ -63,15 +62,15 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=206)
     parser.add_argument("--buffer-size", type=int, default=4096)
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])
-    parser.add_argument("--lr", type=float, default=2e-4)
+
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--epoch", type=int, default=2000)
-    parser.add_argument("--step-per-epoch", type=int, default=6000)
+    parser.add_argument("--step-per-epoch", type=int, default=30000)
     parser.add_argument("--step-per-collect", type=int, default=2048)
     parser.add_argument("--repeat-per-collect", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--training-num", type=int, default=32)
-    parser.add_argument("--test-num", type=int, default=16)
+    parser.add_argument("--training-num", type=int, default=16)
+    parser.add_argument("--test-num", type=int, default=8)
     
     # PPO超参数
     parser.add_argument("--rew-norm", type=int, default=True)
@@ -79,9 +78,19 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--ent-coef", type=float, default=0.0)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--bound-action-method", type=str, default="tanh")
-    parser.add_argument("--lr-decay", type=int, default=True,
+
+    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--lr-decay", type=int, default=False,
                        help="Enable learning rate decay (linear to 0)")
-    parser.add_argument("--max-grad-norm", type=float, default=0.5)
+    
+    parser.add_argument("--max-grad-norm", type=float, default=0.95)
+    parser.add_argument("--grad-norm-decay", action="store_true", default=False,
+                       help="Enable linear decay of max_grad_norm from start to end over epochs")
+    parser.add_argument("--max-grad-norm-start", type=float, default=2.0,
+                       help="Starting value of max_grad_norm when --grad-norm-decay is enabled")
+    parser.add_argument("--max-grad-norm-end", type=float, default=0.5,
+                       help="Ending value of max_grad_norm when --grad-norm-decay is enabled")
+    
     parser.add_argument("--eps-clip", type=float, default=0.2)
     parser.add_argument("--dual-clip", type=float, default=None)
     parser.add_argument("--value-clip", type=int, default=0)
@@ -91,7 +100,7 @@ def get_args() -> argparse.Namespace:
     # 姿态越界阈值课程学习参数
     parser.add_argument("--attitude-bound-start", type=float, default=90.0,
                        help="Initial attitude bound threshold (degrees)")
-    parser.add_argument("--attitude-bound-end", type=float, default=80.0,
+    parser.add_argument("--attitude-bound-end", type=float, default=90.0,
                        help="Final attitude bound threshold (degrees)")
     parser.add_argument("--attitude-bound-decay-epochs", type=int, default=1000,
                        help="Number of epochs to decay from start to end threshold")
@@ -251,19 +260,18 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
     
     lr_scheduler = None
     if args.lr_decay:
-        # 计算总的更新次数
         max_update_num = np.ceil(args.step_per_epoch / args.step_per_collect) * args.epoch
         
-        # 线性衰减学习率到0
-        lr_scheduler = LambdaLR(
-            optim, 
-            lr_lambda=lambda epoch: 1 - epoch / max_update_num
+        lr_scheduler = CosineAnnealingLR(
+            optim,
+            T_max=int(max_update_num),
+            eta_min=args.lr * 0.1  # 最小学习率为初始值的10%
         )
         
-        print(f"✅ Learning rate decay enabled (linear to 0):")
+        print(f"✅ Learning rate decay enabled (cosine annealing):")
         print(f"   Initial LR: {args.lr:.2e}")
-        print(f"   Total updates: {int(max_update_num)}")
-        print(f"   Decay over: {args.epoch} epochs")
+        print(f"   Minimum LR: {args.lr * 0.1:.2e}")
+        print(f"   T_max: {int(max_update_num)} updates")
     
     # ==================== 分布函数 ====================
     def dist(loc_scale: tuple[torch.Tensor, torch.Tensor]) -> Distribution:
@@ -341,7 +349,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
     # ==================== 保存函数 ====================
     def save_best_fn(policy: BasePolicy) -> None:
         """保存最佳模型"""
-        best_path = os.path.join(log_path, "policy.pth")
+        best_path = os.path.join(log_path, "best_policy.pth")
         torch.save({"model": policy.state_dict()}, best_path)
         print(f"💾 Best policy saved to {best_path}")
     
@@ -373,6 +381,12 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             if lr_scheduler is not None:
                 current_lr = optim.param_groups[0]['lr']
                 print(f"   📊 Current learning rate: {current_lr:.2e}")
+            # 打印当前梯度裁剪阈值
+            if hasattr(policy, 'max_grad_norm'):
+                try:
+                    print(f"   ✂️  Current max_grad_norm: {float(policy.max_grad_norm):.4f}")
+                except Exception:
+                    pass
             
             print(f"{'='*60}\n")
 
@@ -387,7 +401,10 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
     print(f"🧪 Test envs: {args.test_num}")
     print(f"🧠 Network: {args.hidden_sizes}")
     print(f"📊 Learning rate: {args.lr:.2e}" + (" (with decay)" if args.lr_decay else ""))
-    print(f"✂️  Gradient clipping: {args.max_grad_norm:.4f}")
+    if args.grad_norm_decay:
+        print(f"✂️  Gradient clipping (cosine anneal): {args.max_grad_norm_start:.4f} → {args.max_grad_norm_end:.4f}")
+    else:
+        print(f"✂️  Gradient clipping: {args.max_grad_norm:.4f}")
     print(f"🎓 Attitude bound: {args.attitude_bound_start}° → {args.attitude_bound_end}°")
     print("="*60 + "\n")
 
@@ -395,6 +412,26 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
     if not args.watch:
         # 训练
         print("🚀 Starting training...\n")
+        # 可选：按 Epoch 线性衰减 max_grad_norm（例如 1.0 -> 0.5）
+        def _maybe_decay_grad_norm(cur_epoch: int) -> None:
+            if not args.grad_norm_decay:
+                return
+            # 余弦退火：从 start 到 end，ratio ∈ [0,1]
+            ratio = min(max(cur_epoch / max(1, args.epoch), 0.0), 1.0)
+            cosine = 0.5 * (1.0 + np.cos(np.pi * ratio))
+            cur = args.max_grad_norm_end + (args.max_grad_norm_start - args.max_grad_norm_end) * cosine
+            # 动态更新策略中的裁剪阈值
+            policy.max_grad_norm = float(cur)
+
+        def train_fn(epoch: int, env_step: int) -> None:
+            _maybe_decay_grad_norm(epoch)
+            # 可选：周期性打印
+            if args.grad_norm_decay and (epoch % 10 == 0):
+                try:
+                    print(f"[Epoch {epoch}] max_grad_norm -> {float(policy.max_grad_norm):.4f}")
+                except Exception:
+                    pass
+
         result = OnpolicyTrainer(
             policy=policy,
             train_collector=train_collector,
@@ -405,6 +442,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
             episode_per_test=args.test_num,
             batch_size=args.batch_size,
             step_per_collect=args.step_per_collect,
+            train_fn=train_fn,
             save_best_fn=save_best_fn,
             save_checkpoint_fn=save_checkpoint_fn,
             logger=logger,
@@ -423,7 +461,7 @@ def train_px4_ppo(args: argparse.Namespace = get_args()) -> None:
         print(f"\n{'='*60}")
         print(f"✅ Training completed!")
         print(f"💾 Final model saved: {final_path}")
-        print(f"📊 Best model: {os.path.join(log_path, 'policy.pth')}")
+        print(f"📊 Best model: {os.path.join(log_path, 'best_policy.pth')}")
         print(f"{'='*60}\n")
     
     else:

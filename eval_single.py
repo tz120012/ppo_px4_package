@@ -24,15 +24,30 @@ from px4Env import QuadcopterEnv
 # ============================================================
 # 1️⃣ 加载 checkpoint
 # ============================================================
-ckpt_path = "./logs/log_train_results/1001/251031-220741/best_policy.pth"
+ckpt_path = "./logs/log_train_results/206/251106-134103/best_policy.pth"
 print("=" * 80)
 print(f"📂 加载模型: {ckpt_path}")
 print("=" * 80)
 
 ckpt = torch.load(ckpt_path, map_location="cpu")
-args = ckpt["args"]
-model_state = ckpt["model"]
+args = ckpt.get('args', None) if isinstance(ckpt, dict) else None
+# args = ckpt["args"]
+model_state = ckpt["model"] if 'model' in ckpt else ckpt['state_dict']
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# 如果 args 为 None，使用空字典作为默认值并从模型权重推断网络结构
+if args is None:
+    args = {}
+    print("⚠️  检查点中未找到 args，尝试从模型权重推断配置")
+    
+    # 从 actor 网络权重推断隐藏层大小
+    if 'actor.preprocess.model.model.0.weight' in model_state:
+        hidden_size = model_state['actor.preprocess.model.model.0.weight'].shape[0]
+        args['hidden_sizes'] = [hidden_size, hidden_size]
+        print(f"   ✅ 推断隐藏层大小: {args['hidden_sizes']}")
+    else:
+        args['hidden_sizes'] = [256, 256]  # 默认值
+        print(f"   ⚠️  无法推断隐藏层大小，使用默认值: {args['hidden_sizes']}")
 
 print(f"✅ 成功加载检查点")
 print(f"   Device: {device}")
@@ -57,8 +72,8 @@ print("🚁 环境配置")
 print("=" * 80)
 
 env = QuadcopterEnv(
-    control_type=args.get("control_type", "xyz_vel"),
-    trajectory_type=args.get("trajectory_type", 1001),
+    control_type=args.get("control_type", "xyz_pos"),
+    trajectory_type=args.get("trajectory_type", 206),
     yaw_type=args.get("yaw_type", 3),
     dt=args.get("sim_dt", args.get("dt", 0.005)),  
     max_episode_steps=args.get("max_episode_steps", 6000),  
@@ -93,7 +108,7 @@ max_action = float(env.action_space.high[0])
 # Actor 网络
 net_a = Net(
     state_shape, 
-    hidden_sizes=args["hidden_sizes"], 
+    hidden_sizes=args.get("hidden_sizes", [256, 256]), 
     activation=nn.Tanh, 
     device=device
 )
@@ -108,7 +123,7 @@ actor = ActorProb(
 # Critic 网络
 net_c = Net(
     state_shape, 
-    hidden_sizes=args["hidden_sizes"], 
+    hidden_sizes=args.get("hidden_sizes", [256, 256]), 
     activation=nn.Tanh, 
     device=device
 )
@@ -149,7 +164,7 @@ policy.load_state_dict(model_state)
 policy.eval()
 
 print(f"✅ 策略网络已加载")
-print(f"   隐藏层: {args['hidden_sizes']}")
+print(f"   隐藏层: {args.get('hidden_sizes', [256, 256])}")
 print(f"   动作缩放: {policy.action_scaling}")
 print(f"   边界方法: {policy.action_bound_method}")
 

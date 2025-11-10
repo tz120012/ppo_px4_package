@@ -347,9 +347,11 @@ class Trajectory:
         #             self.lissajous_phase[i] = 0.0
 
         elif self.xyzType == 206:
-            # 3D李萨如
-            self.lissajous_amp = np.array([20.0, 8.0, 3.0])
+            # 3D李萨如（循环轨迹，30s为周期）
+            self.lissajous_amp = np.array([33.0, 6.0, 3.0])
+            # 频率整数比，配合周期得到各轴角频率：omega_i = 2π * freq[i] / period
             self.lissajous_freq = np.array([2, 3, 3])
+            self.lissajous_period = 30.0
             self.lissajous_center = np.array([0., 0., 10.0])
 
             # 方案1: 根据初始位置调整轨迹中心（推荐）
@@ -381,7 +383,7 @@ class Trajectory:
                     self.lissajous_phase[i] = np.arcsin(sin_val)
                     
                     # 选择使初始速度方向合理的相位
-                    omega = 2 * pi * self.lissajous_freq[i] / 20.0
+                    omega = 2 * pi * self.lissajous_freq[i] / self.lissajous_period
                     
                     # 计算两个可能的相位
                     phase_1 = self.lissajous_phase[i]
@@ -424,7 +426,7 @@ class Trajectory:
             # 计算并显示初始速度
             verify_vel = np.zeros(3)
             for i in range(3):
-                omega = 2 * pi * self.lissajous_freq[i] / 20.0
+                omega = 2 * pi * self.lissajous_freq[i] / self.lissajous_period
                 verify_vel[i] = self.lissajous_amp[i] * omega * np.cos(self.lissajous_phase[i])
             # print(f"  初始速度: {verify_vel}")
             # print(f"  速度幅值: {np.linalg.norm(verify_vel):.2f} m/s")
@@ -810,15 +812,15 @@ class Trajectory:
         self.desAcc[2] = 0
     
     def _pos_lissajous_3d(self, t):
-        """xyzType=206: 3D李萨如"""
+        """xyzType=206: 3D李萨如（30s周期循环）"""
+        # 以固定周期循环，避免仅限前30s
+        t_cycle = np.mod(t, self.lissajous_period)
         for i in range(3):
-            omega = 2 * pi * self.lissajous_freq[i] / 20.0
-            self.desPos[i] = self.lissajous_center[i] + \
-                            self.lissajous_amp[i] * np.sin(omega * t + self.lissajous_phase[i])
-            self.desVel[i] = self.lissajous_amp[i] * omega * \
-                            np.cos(omega * t + self.lissajous_phase[i])
-            self.desAcc[i] = -self.lissajous_amp[i] * omega**2 * \
-                            np.sin(omega * t + self.lissajous_phase[i])
+            omega = 2 * pi * self.lissajous_freq[i] / self.lissajous_period
+            phase = omega * t_cycle + self.lissajous_phase[i]
+            self.desPos[i] = self.lissajous_center[i] + self.lissajous_amp[i] * np.sin(phase)
+            self.desVel[i] = self.lissajous_amp[i] * omega * np.cos(phase)
+            self.desAcc[i] = -self.lissajous_amp[i] * omega**2 * np.sin(phase)
     
     def _generate_random_polynomial(self):
         """生成随机多项式轨迹系数"""
