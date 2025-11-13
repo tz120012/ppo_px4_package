@@ -49,9 +49,9 @@ def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PPO for PX4 Quadcopter PID Optimization")
     
     # 环境参数
-    parser.add_argument("--control-type", type=str, default="xyz_pos", 
+    parser.add_argument("--control-type", type=str, default="xyz_vel", 
                        choices=["xyz_pos", "xy_vel_z_pos", "xyz_vel"])
-    parser.add_argument("--trajectory-type", type=int, default=206)
+    parser.add_argument("--trajectory-type", type=int, default=1001
     parser.add_argument("--yaw-type", type=int, default=3)
     parser.add_argument("--max-episode-steps", type=int, default=6000)
     parser.add_argument("--sim-dt", type=float, default=0.005)
@@ -59,43 +59,43 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--wind-strength", type=float, default=0.0)
 
     # 训练参数
-    parser.add_argument("--seed", type=int, default=206)
+    parser.add_argument("--seed", type=int, default=1001)
     parser.add_argument("--buffer-size", type=int, default=4096)
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])
 
-    parser.add_argument("--gamma", type=float, default=0.99)
+
     parser.add_argument("--epoch", type=int, default=2000)
-    parser.add_argument("--step-per-epoch", type=int, default=30000)
+    parser.add_argument("--step-per-epoch", type=int, default=6000)
     parser.add_argument("--step-per-collect", type=int, default=2048)
     parser.add_argument("--repeat-per-collect", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--training-num", type=int, default=16)
     parser.add_argument("--test-num", type=int, default=8)
     
     # PPO超参数
-    parser.add_argument("--rew-norm", type=int, default=True)
-    parser.add_argument("--vf-coef", type=float, default=0.25)
-    parser.add_argument("--ent-coef", type=float, default=0.0)
-    parser.add_argument("--gae-lambda", type=float, default=0.95)
-    parser.add_argument("--bound-action-method", type=str, default="tanh")
-
-    parser.add_argument("--lr", type=float, default=2e-4)
-    parser.add_argument("--lr-decay", type=int, default=False,
-                       help="Enable learning rate decay (linear to 0)")
-    
-    parser.add_argument("--max-grad-norm", type=float, default=0.95)
-    parser.add_argument("--grad-norm-decay", action="store_true", default=False,
-                       help="Enable linear decay of max_grad_norm from start to end over epochs")
-    parser.add_argument("--max-grad-norm-start", type=float, default=2.0,
-                       help="Starting value of max_grad_norm when --grad-norm-decay is enabled")
-    parser.add_argument("--max-grad-norm-end", type=float, default=0.5,
-                       help="Ending value of max_grad_norm when --grad-norm-decay is enabled")
-    
-    parser.add_argument("--eps-clip", type=float, default=0.2)
-    parser.add_argument("--dual-clip", type=float, default=None)
+    parser.add_argument("--gamma", type=float, default=0.995)#0.99
+    parser.add_argument("--gae-lambda", type=float, default=0.98)#0.95
+    parser.add_argument("--ent-coef", type=float, default=0.01)#0.0
+    parser.add_argument("--vf-coef", type=float, default=0.5)#0.25
+    parser.add_argument("--eps-clip", type=float, default=0.1)#0.2
     parser.add_argument("--value-clip", type=int, default=0)
     parser.add_argument("--norm-adv", type=int, default=0)
     parser.add_argument("--recompute-adv", type=int, default=1)
+    parser.add_argument("--rew-norm", type=int, default=True)
+    parser.add_argument("--bound-action-method", type=str, default="tanh")
+    parser.add_argument("--dual-clip", type=float, default=None)
+
+    parser.add_argument("--lr", type=float, default=1e-4)#2e-4
+    parser.add_argument("--lr-decay", type=int, default=False,
+                       help="Enable learning rate decay (linear to 0)")
+    
+    parser.add_argument("--max-grad-norm", type=float, default=0.5)
+    parser.add_argument("--grad-norm-decay", action="store_true", default=False,
+                       help="Enable linear decay of max_grad_norm from start to end over epochs")
+    parser.add_argument("--max-grad-norm-start", type=float, default=1.0,
+                       help="Starting value of max_grad_norm when --grad-norm-decay is enabled")
+    parser.add_argument("--max-grad-norm-end", type=float, default=0.5,
+                       help="Ending value of max_grad_norm when --grad-norm-decay is enabled")
     
     # 姿态越界阈值课程学习参数
     parser.add_argument("--attitude-bound-start", type=float, default=90.0,

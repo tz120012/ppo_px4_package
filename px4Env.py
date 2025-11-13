@@ -72,18 +72,18 @@ class QuadcopterEnv(gym.Env):
         self.alpha = 0.3    # 平滑过渡系数（仅在enable_smooth_transition=True时生效）
         
         # 奖励缩放因子
-        self.reward_scale = 0.01
-        self.failure_penalty = -500000.0   
+        self.reward_scale = 1.0
+        self.failure_penalty = -15000.0   
 
         #  子步改进相关参数
         self.compat_truncated_as_done = bool(compat_truncated_as_done)
         
         #  根据控制模式自动调整位置和速度权重
         if self.control_type == "xyz_pos":
-            pos_weight_xy = 5.0
-            pos_weight_z = 5.0
-            vel_weight_xy = 10
-            vel_weight_z = 10
+            pos_weight_xy = 0.1
+            pos_weight_z = 0.1
+            vel_weight_xy = 0.3
+            vel_weight_z = 0.3
         elif self.control_type == "xy_vel_z_pos":
             pos_weight_xy = 0.0
             pos_weight_z = 2.0
@@ -92,14 +92,14 @@ class QuadcopterEnv(gym.Env):
         elif self.control_type == "xyz_vel":
             pos_weight_xy = 0.0
             pos_weight_z = 0.0
-            vel_weight_xy = 10.0
-            vel_weight_z = 10.0
+            vel_weight_xy = 0.3
+            vel_weight_z = 0.3
         else:
             log.warning(f" Unknown control_type: {self.control_type}, using default weights")
-            pos_weight_xy = 0.0
-            pos_weight_z = 0.0
-            vel_weight_xy = 10.0
-            vel_weight_z = 10.0
+            pos_weight_xy = 0.1
+            pos_weight_z = 0.1
+            vel_weight_xy = 0.3
+            vel_weight_z = 0.3
 
         # 🔄 修改：降低速度/姿态权重（单步误差波动更大）
         self.segment_weights = dict(
@@ -108,8 +108,8 @@ class QuadcopterEnv(gym.Env):
             W_pos_z=pos_weight_z,
             W_vel_xy=vel_weight_xy ,    
             W_vel_z=vel_weight_z ,      
-            W_att=15.0,                       
-            W_omega=20.0,                      
+            W_att=0.2,                       
+            W_omega=0.1,                      
             
             # 惩罚项
             W_u=0.0,
@@ -117,7 +117,7 @@ class QuadcopterEnv(gym.Env):
             W_domega=0.0,
             W_du=0.0,
             W_sat=0.0,
-            W_over=30.0,
+            W_over=1.0,
         )
 
         # ==================== 限制与判据 ====================
@@ -147,28 +147,95 @@ class QuadcopterEnv(gym.Env):
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
 
-        # ==================== PID参数安全范围 ====================
-        self.pid_safe_min = np.array([
-            0.0, 0.1,
-            1.2, 2.0,
-            0.0, 0.2,
-            0.1, 0.0,
-            0.0, 0.0, 0.0,
-            0.01, 0.01, 0.0,
-            0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0
-        ], dtype=np.float32)
+        # ==================== 速度分段PID参数安全范围 ====================
+        # 定义三个速度域，每个域有不同的PID参数安全范围
+        self.velocity_based_pid_domains = {
+            # 低速域 (0-5 m/s): 悬停、慢速巡航，允许较大增益范围
+            'low': {
+                'vel_range': (0.0, 5.0),
+                'pid_safe_min': np.array([
+                    0.5, 0.4,      # posP_xy, posP_z
+                    10.0, 8,      # velP_xy, velP_z
+                    18.0, 1.2,      # velI_xy, velI_z
+                    0.3, 0.6,      # velD_xy, velD_z
+                    6.0, 6.0, 2.0, # attP (roll, pitch, yaw)
+                    0.4, 0.4, 0.2, # rateP
+                    2.5, 2.5, 4.0, # rateI
+                    0.006, 0.006, 0.003  # rateD
+                ], dtype=np.float32),
+                'pid_safe_max': np.array([
+                    1.5, 1.2,      # posP_xy, posP_z
+                    14.0, 9.0,    # velP_xy, velP_z
+                    22.0, 1.8,     # velI_xy, velI_z (允许较大积分)
+                    0.8, 1.2,      # velD_xy, velD_z
+                    10.0, 10.0, 4.0, # attP
+                    0.6, 0.6, 0.5, # rateP
+                    3.5, 3.5, 6.0, # rateI
+                    0.01, 0.01, 0.008  # rateD
+                ], dtype=np.float32)
+            },
+            
+            # 中速域 (5-10 m/s): 正常巡航，平衡响应与稳定性
+            'medium': {
+                'vel_range': (5.0, 10.0),
+                'pid_safe_min': np.array([
+                    0.5, 0.4,
+                    8.0, 6.5,      # 提高速度环P增益下限
+                    18, 1.4,      # 提高I增益下限
+                    0.4, 0.9,      # 提高D增益下限（抑制振荡）
+                    6, 6, 2.5, # 提高姿态环P增益下限
+                    0.45, 0.45, 0.25,
+                    2.0, 2.0, 4.0,
+                    0.006, 0.006, 0.003
+                ], dtype=np.float32),
+                'pid_safe_max': np.array([
+                    1.5, 1.2,      # 降低位置环上限
+                    12.0, 10.0,    # 适度降低速度环上限
+                    22.0, 1.8,     # 降低I增益上限（防止积分饱和）
+                    0.6, 1.1,      # 降低D增益上限
+                    10.0, 10.0, 4.0, # 降低姿态环上限
+                    0.55, 0.55, 0.35,
+                    4, 4, 6,
+                    0.01, 0.01, 0.007
+                ], dtype=np.float32)
+            },
+            
+            # 高速域 (10-15 m/s): 高速飞行，强调稳定性和安全性
+            'high': {
+                'vel_range': (10.0, 15.0),
+                'pid_safe_min': np.array([
+                    0.5, 0.4,     # 降低位置环下限
+                    7, 8,      # 进一步提高速度环下限
+                    18, 1.5,      # 提高I增益下限
+                    0.45, 0.9,      # 更高的D增益下限（强化阻尼）
+                    6, 6, 2.5, # 提高姿态环P增益下限
+                    0.45, 0.45, 0.25,
+                    2.0, 2.0, 4.0,
+                    0.006, 0.006, 0.003
+                ], dtype=np.float32),
+                'pid_safe_max': np.array([
+                    1.5, 1.2,      # 进一步降低位置环上限
+                    9, 9,    # 降低速度环上限（防止过冲）
+                    21, 1.7,     # 大幅降低I增益（高速时积分需谨慎）
+                    0.55, 1.1,      # 降低D增益上限
+                    10.0, 10.0, 4.0, # 降低姿态环上限
+                    0.55, 0.55, 0.35,
+                    4, 4, 6,
+                    0.01, 0.01, 0.007
+                ], dtype=np.float32)
+            }
+        }
         
-        self.pid_safe_max = np.array([
-            2.0, 1.5,
-            15.0, 15.0,
-            60.0, 3.0,
-            2.0, 2.0,
-            12.0, 12.0, 5.0,
-            0.5, 0.6, 0.6,
-            10.0, 10.0, 10.0,
-            0.01, 0.01, 0.01
-        ], dtype=np.float32)
+        # 当前使用的参数域（初始化为低速域）
+        self.current_pid_domain = 'low'
+        self.pid_safe_min = self.velocity_based_pid_domains['low']['pid_safe_min'].copy()
+        self.pid_safe_max = self.velocity_based_pid_domains['low']['pid_safe_max'].copy()
+        
+        # 域切换平滑过渡参数
+        self.domain_transition_steps = 10  # 切换域时的平滑步数
+        self._domain_transition_counter = 0
+        self._domain_transition_target_min = None
+        self._domain_transition_target_max = None
 
         # ==================== 初始化仿真组件 ====================
         self._initialize_simulation()
@@ -281,6 +348,14 @@ class QuadcopterEnv(gym.Env):
         self._initialize_simulation()
         log.info(f" reset() called: env_id={id(self)}, resetting to step 0, time={self.time:.3f}s")
 
+        # 🆕 重置PID域到低速域
+        self.current_pid_domain = 'low'
+        self.pid_safe_min = self.velocity_based_pid_domains['low']['pid_safe_min'].copy()
+        self.pid_safe_max = self.velocity_based_pid_domains['low']['pid_safe_max'].copy()
+        self._domain_transition_counter = 0
+        self._domain_transition_target_min = None
+        self._domain_transition_target_max = None
+
         # 基线PID参数
         self.pid_K_prev_vec = (self.pid_safe_min + self.pid_safe_max) / 2.0
         self.init_actions = np.zeros(20)
@@ -363,6 +438,66 @@ class QuadcopterEnv(gym.Env):
     # =========================
     # 辅助函数
     # =========================
+    def _update_pid_domain_based_on_velocity(self):
+        """
+        根据当前参考速度更新PID参数域
+        
+        Returns:
+            tuple: (速度大小, 当前域名称)
+        """
+        # 计算参考速度的模
+        if hasattr(self.ctrl, 'sDesCalc') and self.ctrl.sDesCalc is not None:
+            vel_ref = self.ctrl.sDesCalc[3:6]
+            vel_mag = float(np.linalg.norm(vel_ref))
+        else:
+            vel_mag = 0.0
+        
+        # 确定应该使用的域
+        target_domain = None
+        for domain_name, domain_config in self.velocity_based_pid_domains.items():
+            vel_min, vel_max = domain_config['vel_range']
+            if vel_min <= vel_mag < vel_max:
+                target_domain = domain_name
+                break
+        
+        # 如果速度超过所有域的范围，使用最高域
+        if target_domain is None:
+            if vel_mag >= 15.0:
+                target_domain = 'high'
+            else:
+                target_domain = 'low'
+        
+        # 检查是否需要切换域
+        if target_domain != self.current_pid_domain:
+            log.info(
+                f"🔄 PID域切换: {self.current_pid_domain} → {target_domain} "
+                f"(参考速度: {vel_mag:.2f} m/s)"
+            )
+            
+            # 启动平滑过渡
+            self._domain_transition_counter = self.domain_transition_steps
+            self._domain_transition_target_min = self.velocity_based_pid_domains[target_domain]['pid_safe_min'].copy()
+            self._domain_transition_target_max = self.velocity_based_pid_domains[target_domain]['pid_safe_max'].copy()
+            self.current_pid_domain = target_domain
+        
+        # 执行平滑过渡
+        if self._domain_transition_counter > 0:
+            alpha = 1.0 - (self._domain_transition_counter / self.domain_transition_steps)
+            
+            # 线性插值
+            current_min = self.velocity_based_pid_domains[self.current_pid_domain]['pid_safe_min']
+            current_max = self.velocity_based_pid_domains[self.current_pid_domain]['pid_safe_max']
+            
+            self.pid_safe_min = (1 - alpha) * self.pid_safe_min + alpha * self._domain_transition_target_min
+            self.pid_safe_max = (1 - alpha) * self.pid_safe_max + alpha * self._domain_transition_target_max
+            
+            self._domain_transition_counter -= 1
+            
+            if self._domain_transition_counter == 0:
+                log.info(f"✅ PID域切换完成: {self.current_pid_domain}")
+        
+        return vel_mag, target_domain
+    
     def _unpack_vec_to_groups(self, K_vec: np.ndarray) -> dict:
         """将20维向量解包为8组增益"""
         K_vec = np.asarray(K_vec, dtype=np.float32).reshape(20,)
@@ -396,70 +531,6 @@ class QuadcopterEnv(gym.Env):
             "rate_D_gains": rate_D_gains,
         }
     
-    def _error_gated_action_adaptation(self, action: np.ndarray) -> np.ndarray:
-        """分层+分通道误差门控机制（12 个独立通道）"""
-        obs_cur = self._get_observation(self.ctrl.sDesCalc)
-        
-        pos_err = obs_cur[24:27]
-        vel_err = obs_cur[27:30]
-        att_err = obs_cur[30:33]
-        omega_err = obs_cur[33:36]
-
-        thresh1 = 0.03
-        thresh2 = 0.3
-        limit_delta = 1.0
-
-        def _gate_indices(err_val, idxs):
-            if err_val < thresh1:
-                action[idxs] = self.prev_action[idxs]
-            elif thresh1 <= err_val < thresh2:
-                delta = np.clip(action[idxs] - self.prev_action[idxs], 
-                            -limit_delta, limit_delta)
-                action[idxs] = self.prev_action[idxs] + delta
-            else:
-                pass
-
-        # 位置环
-        if self.control_type == "xyz_vel":
-            pos_err_xy = 0
-            pos_err_z = 0
-        elif self.control_type == "xyz_pos":
-            pos_err_xy = max(abs(pos_err[0]), abs(pos_err[1]))
-            pos_err_z = abs(pos_err[2])
-        elif self.control_type == "xy_vel_z_pos":
-            pos_err_xy = 0
-            pos_err_z = abs(pos_err[2])
-        
-        _gate_indices(pos_err_xy, [0])
-        _gate_indices(pos_err_z, [1])
-
-        # 速度环
-        vel_err_xy = max(abs(vel_err[0]), abs(vel_err[1]))
-        vel_err_z = abs(vel_err[2])
-        
-        _gate_indices(vel_err_xy, [2, 4, 6])
-        _gate_indices(vel_err_z, [3, 5, 7])
-
-        # 姿态环
-        att_err_roll = abs(att_err[0])
-        att_err_pitch = abs(att_err[1])
-        att_err_yaw = abs(att_err[2])
-        
-        _gate_indices(att_err_roll, [8])
-        _gate_indices(att_err_pitch, [9])
-        _gate_indices(att_err_yaw, [10])
-
-        # 角速度环
-        omega_err_roll = abs(omega_err[0])
-        omega_err_pitch = abs(omega_err[1])
-        omega_err_yaw = abs(omega_err[2])
-        
-        _gate_indices(omega_err_roll, [11, 14, 17])
-        _gate_indices(omega_err_pitch, [12, 15, 18])
-        _gate_indices(omega_err_yaw, [13, 16, 19])
-
-        return action
-
     def _log_reward_to_csv(self, reward_dict):
         """将奖励详情记录到CSV文件"""
         log_dir = "logs/reward_debug"
@@ -492,9 +563,10 @@ class QuadcopterEnv(gym.Env):
         执行一个环境步骤（统一时间步长后无需子步循环）
         """
         # ============================================================
-        # 阶段1: 误差门控动作调整
+        # 阶段1: 🆕 根据参考速度更新PID参数域
         # ============================================================
-        action = self._error_gated_action_adaptation(action)
+        vel_mag, current_domain = self._update_pid_domain_based_on_velocity()
+        
         self.prev_action = np.asarray(action, dtype=np.float32).ravel().copy()
 
         # ============================================================
@@ -530,8 +602,16 @@ class QuadcopterEnv(gym.Env):
         # ============================================================
         # 阶段4：奖励计算
         # ============================================================
+        # 计算基础奖励
         segment_reward, reward_for_debug, metrics = self._compute_reward_step([sample])
-
+        
+        # 🆕 添加成功奖励（跟踪误差小时给予额外奖励）
+        pos_err_norm = float(np.sqrt(m["pos_err_x"]**2 + m["pos_err_y"]**2 + m["pos_err_z"]**2))
+        vel_err_norm = float(np.sqrt(m["vel_err_x"]**2 + m["vel_err_y"]**2 + m["vel_err_z"]**2))
+        
+        if pos_err_norm < 0.5 and vel_err_norm < 0.5:  # 误差阈值
+            segment_reward += 10.0  # 成功奖励
+    
         # 统一奖励缩放
         reward = segment_reward * self.reward_scale
         self.step_reward = reward
@@ -552,7 +632,9 @@ class QuadcopterEnv(gym.Env):
             info = {
                 'termination_reason': 'out_of_bounds',
                 'step': self.current_step,
-                'env_id': id(self)
+                'env_id': id(self),
+                'velocity_magnitude': float(vel_mag),
+                'pid_domain': str(current_domain),
             }
             
             log.warning(
@@ -575,6 +657,8 @@ class QuadcopterEnv(gym.Env):
                 'step': self.current_step,
                 'TimeLimit.truncated': True,
                 'env_id': id(self),
+                'velocity_magnitude': float(vel_mag),
+                'pid_domain': str(current_domain),
             }
             log.info(f"⏱️ Episode time limit reached at step {self.current_step}")
             obs = self._get_observation(self.ctrl.sDesCalc)
@@ -603,7 +687,11 @@ class QuadcopterEnv(gym.Env):
 
         # 正常路径：返回本步结果
         obs = self._get_observation(self.ctrl.sDesCalc)
-        info = {}
+        info = {
+            'velocity_magnitude': float(vel_mag),
+            'pid_domain': str(current_domain),
+            'domain_transition_progress': float(1.0 - self._domain_transition_counter / self.domain_transition_steps) if self._domain_transition_counter > 0 else 1.0
+        }
         return obs, reward, False, False, info
 
     # ============================================================
@@ -1594,3 +1682,117 @@ class QuadcopterEnv(gym.Env):
             plt.close(fig)
         else:
             plt.show()
+    
+    def render_domain_switches(self, save_path=None):
+        """
+        绘制PID域切换历史
+        
+        Args:
+            save_path: 图片保存路径
+        """
+        try:
+            import matplotlib
+            if save_path:
+                matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+        except Exception as e:
+            print(f"⚠️ Matplotlib 不可用: {e}")
+            return
+        
+        # 检查数据
+        if not hasattr(self, 'episode_vel_des_all') or len(self.episode_vel_des_all) == 0:
+            print("⚠️ 没有速度历史数据")
+            return
+        
+        end_idx = int(self.current_step)
+        if end_idx <= 1:
+            print("⚠️ 没有足够的数据")
+            return
+        
+        t = self.episode_t_all[:end_idx]
+        vel_des = self.episode_vel_des_all[:end_idx]
+        vel_mag = np.linalg.norm(vel_des, axis=1)
+        
+        # 创建图表
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 8), sharex=True)
+        fig.suptitle("PID Domain Switching History", fontsize=14, fontweight='bold')
+        
+        # 上图：速度大小
+        ax1.plot(t, vel_mag, 'b-', lw=2, label='Reference Velocity')
+        ax1.axhline(5.0, color='green', linestyle='--', lw=1.5, label='Low→Medium (5 m/s)')
+        ax1.axhline(10.0, color='orange', linestyle='--', lw=1.5, label='Medium→High (10 m/s)')
+        ax1.fill_between(t, 0, 5, alpha=0.2, color='green', label='Low Domain')
+        ax1.fill_between(t, 5, 10, alpha=0.2, color='yellow', label='Medium Domain')
+        ax1.fill_between(t, 10, 15, alpha=0.2, color='red', label='High Domain')
+        ax1.set_ylabel("Velocity (m/s)", fontsize=12)
+        ax1.set_title("Reference Velocity Magnitude", fontweight='bold')
+        ax1.legend(loc='upper right', fontsize=9)
+        ax1.grid(alpha=0.3)
+        ax1.set_ylim(0, max(15, vel_mag.max() * 1.1))
+        
+        # 下图：域标识
+        domain_history = []
+        for v in vel_mag:
+            if v < 5.0:
+                domain_history.append(0)  # low
+            elif v < 10.0:
+                domain_history.append(1)  # medium
+            else:
+                domain_history.append(2)  # high
+        
+        domain_colors = {0: 'green', 1: 'yellow', 2: 'red'}
+        domain_names = {0: 'Low', 1: 'Medium', 2: 'High'}
+        
+        for i in range(len(t)-1):
+            ax2.fill_between(
+                [t[i], t[i+1]], 
+                0, 1, 
+                color=domain_colors[domain_history[i]], 
+                alpha=0.6
+            )
+        
+        ax2.set_xlabel("Time (s)", fontsize=12)
+        ax2.set_ylabel("PID Domain", fontsize=12)
+        ax2.set_yticks([0.25, 0.5, 0.75])
+        ax2.set_yticklabels(['Low', 'Medium', 'High'])
+        ax2.set_title("Active PID Domain", fontweight='bold')
+        ax2.set_ylim(0, 1)
+        ax2.grid(alpha=0.3, axis='x')
+        
+        # 统计域切换次数
+        switches = 0
+        for i in range(1, len(domain_history)):
+            if domain_history[i] != domain_history[i-1]:
+                switches += 1
+        
+        # 添加统计信息
+        stats_text = f"Domain Switches: {switches}\n"
+        stats_text += f"Low: {domain_history.count(0)/len(domain_history)*100:.1f}%\n"
+        stats_text += f"Medium: {domain_history.count(1)/len(domain_history)*100:.1f}%\n"
+        stats_text += f"High: {domain_history.count(2)/len(domain_history)*100:.1f}%"
+        ax2.text(0.02, 0.98, stats_text, transform=ax2.transAxes,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
+                fontsize=10, family='monospace')
+        
+        plt.tight_layout()
+        
+        if save_path:
+            import os
+            os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else '.', exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"✅ 域切换历史图已保存: {save_path}")
+            plt.close(fig)
+        else:
+            plt.show()
+        
+        # 打印详细统计
+        print("\n" + "="*60)
+        print("PID Domain Switching Statistics")
+        print("="*60)
+        print(f"Total domain switches: {switches}")
+        print(f"Low domain time: {domain_history.count(0)/len(domain_history)*100:.2f}%")
+        print(f"Medium domain time: {domain_history.count(1)/len(domain_history)*100:.2f}%")
+        print(f"High domain time: {domain_history.count(2)/len(domain_history)*100:.2f}%")
+        print(f"Average velocity: {vel_mag.mean():.2f} m/s")
+        print(f"Max velocity: {vel_mag.max():.2f} m/s")
+        print("="*60)

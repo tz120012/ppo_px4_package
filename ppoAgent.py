@@ -10,8 +10,8 @@ import numpy as np
 import socket
 import struct
 
-# ============ 配置 ============ 251110-134957
-ACTOR_PATH = "./logs/log_train_results/206/251110-134957/best_policy.pth"
+# ============ 配置 ============ 
+ACTOR_PATH = "./logs/log_train_results/1001/251111-232421/best_policy.pth"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 LOCAL_IP = '127.0.0.1'

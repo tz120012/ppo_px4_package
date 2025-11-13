@@ -25,18 +25,38 @@ deg2rad = pi/180.0
 class Control:
     
     def __init__(self, quad, yawType):
-        # Set PID Gains and Max Values
+        # # Set PID Gains and Max Values
+        # # 高速段：10~15m/s
+        # self.pos_P_gain = np.array([1.0, 1.0, 0.8])
+        # self.vel_P_gain = np.array([8.0, 8.0, 8.5])
+        # self.vel_I_gain = np.array([20.0, 20.0, 1.6])
+        # self.vel_D_gain = np.array([0.5, 0.5, 1.0])  
+        # self.att_P_gain = np.array([8, 8, 2.75])
+        # self.rate_P_gain = np.array([0.5, 0.5, 0.305])
+        # self.rate_I_gain = np.array([3.0, 3.0, 5.0])
+        # self.rate_D_gain = np.array([0.008, 0.008, 0.005])
+
+
+        # 中速段：5~10m/s
         self.pos_P_gain = np.array([1.0, 1.0, 0.8])
-
-        self.vel_P_gain = np.array([5.5, 5.5, 8.5])
-        self.vel_I_gain = np.array([3.3, 3.3, 1.6])
-        self.vel_D_gain = np.array([0.01, 0.01, 1.0])
-
+        self.vel_P_gain = np.array([10.0, 10.0, 8.5])
+        self.vel_I_gain = np.array([20.0, 20.0, 1.6])
+        self.vel_D_gain = np.array([0.5, 0.5, 1.0])  
         self.att_P_gain = np.array([8, 8, 2.75])
-
         self.rate_P_gain = np.array([0.5, 0.5, 0.305])
         self.rate_I_gain = np.array([3.0, 3.0, 5.0])
         self.rate_D_gain = np.array([0.008, 0.008, 0.005])
+
+        # # # 低速段：0~5m/s
+        # self.pos_P_gain = np.array([1.0, 1.0, 0.8])
+        # self.vel_P_gain = np.array([12.0, 12.0, 8.5])
+        # self.vel_I_gain = np.array([20.0, 20.0, 1.6])
+        # self.vel_D_gain = np.array([0.5, 0.5, 1.0])  
+        # self.att_P_gain = np.array([8, 8, 2.75])
+        # self.rate_P_gain = np.array([0.5, 0.5, 0.305])
+        # self.rate_I_gain = np.array([3.0, 3.0, 5.0])
+        # self.rate_D_gain = np.array([0.008, 0.008, 0.005])
+
 
         # Attitude P gains
         self.PpsiStrong = 8
@@ -52,7 +72,7 @@ class Control:
         self.saturateVel_separetely = False
 
         # Max tilt
-        self.tiltMax = 50.0*deg2rad
+        self.tiltMax = 60.0*deg2rad
 
         # Max Rate
         pMax = 300.0*deg2rad
@@ -78,7 +98,7 @@ class Control:
 
         self.rate_int = np.zeros(3)
         # 积分器限制值
-        self._lim_int = np.array([0.3, 0.3, 0.1])  # [roll, pitch, yaw] 积分限制
+        self._lim_int = np.array([0.2, 0.2, 0.1])  # [roll, pitch, yaw] 积分限制
         # 着陆状态标志
         self.island = True    
 

@@ -59,7 +59,7 @@ class Trajectory:
     轨迹类型编码 (xyzType):
         速度跟踪轨迹 (100-199):
             *** 新拆分轨迹 ***
-            * 1001: 俯仰轴阶跃测试 (30秒)
+            * 1001: 俯仰轴阶跃测试 (25秒) - 0->3->0->8->15 m/s
             1002: 滚转轴阶跃测试 (30秒)
             1003: 俯仰-滚转耦合阶跃测试 (30秒)
             1011: 正弦扫频扫幅 - 低频段 (30秒)
@@ -171,9 +171,9 @@ class Trajectory:
         
         # ==================== 新拆分轨迹参数 ====================
         if self.xyzType in [1001, 1002, 1003]:
-            # 统一序列：每段 5s，序列为 0 -> 2 -> 0 -> 5 -> 0 -> 10 （总 30s）
+            # 统一序列：每段 5s，序列为 0 -> 3 -> 0 -> 8 -> 15 -> 0 （总 30s）
             self.step_duration = 5.0
-            self.step_sequence = [0.0, 2.0, 0.0, 5.0, 0.0, 10.0]
+            self.step_sequence = [0.0, 3.0, 0.0, 8.0, 15.0, 0.0]
             self.num_steps = len(self.step_sequence)
             self.total_seq_time = self.step_duration * self.num_steps
             # 耦合时 roll = pitch * roll_pitch_ratio
@@ -185,20 +185,22 @@ class Trajectory:
         elif self.xyzType in [1011, 1012]:
             # 正弦扫频扫幅 - 拆分版（各30秒）
             self.vel_amplitude_min = 3.0
-            self.vel_amplitude_max = 15.0
-            self.vel_amplitude_period = 30.0
             self.vel_axis_ratio = np.array([1.0, 0.0, 0.0])
             self.vel_phase = np.array([0, pi/3, 2*pi/3])
             # 确保对 1012 使用 0.05 - 0.2 Hz，并引入参考时间以保证周期性（30s）与不随全局时间累增
             if self.xyzType == 1011:
                 # 低频段：0.01 - 0.055 Hz
+                self.vel_amplitude_max = 15.0
+                self.vel_amplitude_period = 30.0
                 self.vel_freq_min = 0.01
                 self.vel_freq_max = 0.055
                 self.vel_freq_period = 30.0
             else:  # 1012
-                # 高频段：固定为 0.05 - 0.3 Hz，周期 30s（以相对时间为基准）
+                # 高频段：幅值 3-15 m/s，频率 0.1-0.5 Hz，周期 30s
+                self.vel_amplitude_max = 15.0
+                self.vel_amplitude_period = 30.0
                 self.vel_freq_min = 0.1
-                self.vel_freq_max = 0.3
+                self.vel_freq_max = 0.5
                 self.vel_freq_period = 30.0
             # 参考时间：首次计算时记录，之后所有扫频以相对时间 (t - ref) 为基础
             self._sine_sweep_ref_time = None
@@ -456,7 +458,7 @@ class Trajectory:
     # ========================================================================
     
     def _vel_pitch_only_step(self, t):
-        """xyzType=1001: 俯仰轴阶跃测试（循环，不再仅限 30s）"""
+        """xyzType=1001: 俯仰轴阶跃测试（循环，25秒周期：0->3->0->8->15 m/s，每段5s）"""
         desVel = np.zeros(3)
         if self.num_steps == 0 or self.step_duration <= 0:
             return desVel
@@ -498,12 +500,17 @@ class Trajectory:
         desAcc = np.zeros(3)
         
         # 若未设置参考时间，则以首次调用时的 t 作为起点
-        if hasattr(self, "_sine_sweep_ref_time") and self._sine_sweep_ref_time is None:
+        if not hasattr(self, "_sine_sweep_ref_time") or self._sine_sweep_ref_time is None:
             self._sine_sweep_ref_time = t
             self._sine_sweep_last_t = t
             self._sine_sweep_phase_accum = 0.0
-        # 如果没有该属性（向下兼容），直接使用全局 t
-        tt = t if not hasattr(self, "_sine_sweep_ref_time") else (t - self._sine_sweep_ref_time)
+        
+        # 如果没有相位累积属性，初始化它（向下兼容）
+        if not hasattr(self, "_sine_sweep_phase_accum"):
+            self._sine_sweep_phase_accum = 0.0
+        
+        # 计算相对时间
+        tt = t - self._sine_sweep_ref_time
         if tt < 0:
             # 保证非负
             tt = 0.0
@@ -1054,7 +1061,7 @@ if __name__ == "__main__":
     print("四旋翼轨迹生成器测试 - 包含新拆分轨迹")
     print("=" * 70)
     print("\n新增轨迹:")
-    print("  1001: 俯仰轴阶跃 (30秒)")
+    print("  1001: 俯仰轴阶跃 (25秒) - 0->3->0->8->15 m/s")
     print("  1002: 滚转轴阶跃 (30秒)")
     print("  1003: 俯仰-滚转耦合 (30秒)")
     print("  1011: 正弦扫频低频段 0.01-0.055Hz (30秒)")
