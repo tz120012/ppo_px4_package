@@ -151,9 +151,9 @@ class QuadUDPInterface:
         self.enabled = config['enabled']
         
         # 🆕 速度分段PID域管理
-        self.current_pid_domain = 'low'
-        self.pid_safe_min = VELOCITY_BASED_PID_DOMAINS['low']['pid_safe_min'].copy()
-        self.pid_safe_max = VELOCITY_BASED_PID_DOMAINS['low']['pid_safe_max'].copy()
+        self.current_pid_domain = 'high'
+        self.pid_safe_min = VELOCITY_BASED_PID_DOMAINS['high']['pid_safe_min'].copy()
+        self.pid_safe_max = VELOCITY_BASED_PID_DOMAINS['high']['pid_safe_max'].copy()
         self.domain_transition_steps = 10  # 切换域时的平滑步数
         self._domain_transition_counter = 0
         self._domain_transition_target_min = None
@@ -565,7 +565,7 @@ def main():
     # --------------------------- 
     Ti = 0
     Ts = 0.005
-    Tf = 300
+    Tf = 30
     ifsave = 0
 
     # Choose trajectory settings

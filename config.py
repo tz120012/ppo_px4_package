@@ -68,3 +68,8 @@ VEL_AMP_PERIOD_S       = 60.0
 
 # 可选：统一相位偏移
 ALT_SWEEP_PHASE        = 0.0
+
+# -----------------------------
+# Error gating default (用于在环境与脚本之间共享开关)
+# True = 默认启用误差门控；也可以在创建环境时覆盖
+ERROR_GATING_ENABLED = True

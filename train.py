@@ -51,7 +51,7 @@ def get_args() -> argparse.Namespace:
     # 环境参数
     parser.add_argument("--control-type", type=str, default="xyz_vel", 
                        choices=["xyz_pos", "xy_vel_z_pos", "xyz_vel"])
-    parser.add_argument("--trajectory-type", type=int, default=1001
+    parser.add_argument("--trajectory-type", type=int, default=1001)
     parser.add_argument("--yaw-type", type=int, default=3)
     parser.add_argument("--max-episode-steps", type=int, default=6000)
     parser.add_argument("--sim-dt", type=float, default=0.005)
