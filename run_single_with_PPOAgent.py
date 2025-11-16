@@ -31,9 +31,12 @@ UDP_CONFIG = {
     'buffer_size': 1024,           # 接收缓冲区大小
     'state_freq': 200,              # 状态发送频率 (Hz)
     'action_freq': 200,             # 动作接收频率 (Hz)
-    
+
     # 🆕 误差门控配置
-    'error_gating_enabled': True,  # 是否启用误差门控
+    'error_gating_enabled': False,  # 是否启用误差门控
+
+    # 🆕 域切换开关
+    'domain_switch_enabled': True,
 }
 
 OBS_DIM = 56            # 观测维度
@@ -150,10 +153,14 @@ class QuadUDPInterface:
         self.config = config
         self.enabled = config['enabled']
         
+        # 🆕 域切换控制
+        self.domain_switch_enabled = bool(self.config.get('domain_switch_enabled', False))
+
         # 🆕 速度分段PID域管理
-        self.current_pid_domain = 'high'
-        self.pid_safe_min = VELOCITY_BASED_PID_DOMAINS['high']['pid_safe_min'].copy()
-        self.pid_safe_max = VELOCITY_BASED_PID_DOMAINS['high']['pid_safe_max'].copy()
+        initial_domain = 'high' if self.domain_switch_enabled else 'low'
+        self.current_pid_domain = initial_domain
+        self.pid_safe_min = VELOCITY_BASED_PID_DOMAINS[initial_domain]['pid_safe_min'].copy()
+        self.pid_safe_max = VELOCITY_BASED_PID_DOMAINS[initial_domain]['pid_safe_max'].copy()
         self.domain_transition_steps = 10  # 切换域时的平滑步数
         self._domain_transition_counter = 0
         self._domain_transition_target_min = None
@@ -188,7 +195,10 @@ class QuadUDPInterface:
         print(f"✅ UDP 通信已启动")
         print(f"   发送状态到: {config['local_ip']}:{config['send_port']}")
         print(f"   接收指令从: {config['local_ip']}:{config['recv_port']}")
-        print(f"   速度域切换: 启用 (低速: 0-5 m/s, 中速: 5-10 m/s, 高速: 10-15 m/s)")
+        if self.domain_switch_enabled:
+            print(f"   速度域切换: 启用 (低速: 0-5 m/s, 中速: 5-10 m/s, 高速: 10-15 m/s)")
+        else:
+            print(f"   速度域切换: 已禁用 (固定域: {self.current_pid_domain})")
     
     def _update_pid_domain_based_on_velocity(self, ctrl):
         """
@@ -207,6 +217,9 @@ class QuadUDPInterface:
         else:
             vel_mag = 0.0
         
+        if not self.domain_switch_enabled:
+            return vel_mag, self.current_pid_domain
+
         # 确定应该使用的域
         target_domain = None
         for domain_name, domain_config in VELOCITY_BASED_PID_DOMAINS.items():
@@ -214,42 +227,36 @@ class QuadUDPInterface:
             if vel_min <= vel_mag < vel_max:
                 target_domain = domain_name
                 break
-        
+
         # 如果速度超过所有域的范围，使用最高域
         if target_domain is None:
-            if vel_mag >= 15.0:
-                target_domain = 'high'
-            else:
-                target_domain = 'low'
-        
+            target_domain = 'high' if vel_mag >= 15.0 else 'low'
+
         # 检查是否需要切换域
         if target_domain != self.current_pid_domain:
             print(f"🔄 PID域切换: {self.current_pid_domain} → {target_domain} "
                   f"(参考速度: {vel_mag:.2f} m/s)")
-            
+
             # 启动平滑过渡
             self._domain_transition_counter = self.domain_transition_steps
             self._domain_transition_target_min = VELOCITY_BASED_PID_DOMAINS[target_domain]['pid_safe_min'].copy()
             self._domain_transition_target_max = VELOCITY_BASED_PID_DOMAINS[target_domain]['pid_safe_max'].copy()
             self.current_pid_domain = target_domain
             self.domain_switch_count += 1
-        
+
         # 执行平滑过渡
         if self._domain_transition_counter > 0:
             alpha = 1.0 - (self._domain_transition_counter / self.domain_transition_steps)
-            
+
             # 线性插值
-            current_min = VELOCITY_BASED_PID_DOMAINS[self.current_pid_domain]['pid_safe_min']
-            current_max = VELOCITY_BASED_PID_DOMAINS[self.current_pid_domain]['pid_safe_max']
-            
             self.pid_safe_min = (1 - alpha) * self.pid_safe_min + alpha * self._domain_transition_target_min
             self.pid_safe_max = (1 - alpha) * self.pid_safe_max + alpha * self._domain_transition_target_max
-            
+
             self._domain_transition_counter -= 1
-            
+
             if self._domain_transition_counter == 0:
                 print(f"✅ PID域切换完成: {self.current_pid_domain}")
-        
+
         return vel_mag, target_domain
     
     def _error_gated_action_adaptation(self, action, errors):
@@ -577,7 +584,7 @@ def main():
     ctrlType = ctrlOptions[2]
     
     # Select Position Trajectory Type
-    trajSelect[0] = 1001
+    trajSelect[0] = 1014
 
     # Select Yaw Trajectory Type
     trajSelect[1] = 3

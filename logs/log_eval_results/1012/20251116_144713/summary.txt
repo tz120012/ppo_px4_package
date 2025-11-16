@@ -1,0 +1,135 @@
+================================================================================
+Evaluation Summary
+================================================================================
+
+1. Basic Information
+--------------------------------------------------------------------------------
+Model: ./logs/log_train_results/1012/251115-214932/best_policy.pth
+Timestamp: 20251116_144713
+Device: cuda
+
+2. Environment Configuration
+--------------------------------------------------------------------------------
+Control Type: xyz_vel
+Trajectory Type: 1012
+Yaw Type: 3
+Time Step: 0.005s
+Max Episode Steps: 6000
+State Dimension: (56,)
+Action Dimension: (20,)
+
+3. Episode Results
+--------------------------------------------------------------------------------
+Total Steps: 6000
+Total Reward: -15487.2358
+Episode Time: 13.97s
+Average Step Rate: 429.5 steps/s
+Simulation Time: 30.00s
+Termination: time_limit
+
+4. Tracking Performance
+--------------------------------------------------------------------------------
+
+Position RMSE (m):
+  X: 20.758632
+  Y: 0.000000
+  Z: 0.126670
+  Total: 20.759018
+
+Position Max Error (m):
+  X: 33.163452
+  Y: 0.000000
+  Z: 0.445896
+
+Velocity RMSE (m/s):
+  Vx: 3.357695
+  Vy: 0.000000
+  Vz: 0.106891
+  Total: 3.359396
+
+Velocity Max Error (m/s):
+  Vx: 12.788601
+  Vy: 0.000000
+  Vz: 0.454218
+
+Attitude RMSE (deg):
+  Roll:  0.000000
+  Pitch: 19.054178
+  Yaw:   0.000000
+  Total: 19.054178
+
+Attitude Max Error (deg):
+  Roll:  0.000000
+  Pitch: 103.513760
+  Yaw:   0.000000
+
+5. PID Gains Information
+--------------------------------------------------------------------------------
+Total PID Updates: 5999
+PID Parameters: 20
+
+Initial PID Gains:
+  Gain[ 0]:   1.0000
+  Gain[ 1]:   0.8000
+  Gain[ 2]:  12.0000
+  Gain[ 3]:   8.5000
+  Gain[ 4]:  20.0000
+  Gain[ 5]:   1.5000
+  Gain[ 6]:   0.5500
+  Gain[ 7]:   0.9000
+  Gain[ 8]:   8.7575
+  Gain[ 9]:   7.4955
+  Gain[10]:   3.0530
+  Gain[11]:   0.5819
+  Gain[12]:   0.4000
+  Gain[13]:   0.2687
+  Gain[14]:   2.9074
+  Gain[15]:   2.7583
+  Gain[16]:   5.7018
+  Gain[17]:   0.0087
+  Gain[18]:   0.0100
+  Gain[19]:   0.0038
+
+Final PID Gains:
+  Gain[ 0]:   1.0695
+  Gain[ 1]:   0.6657
+  Gain[ 2]:  13.9993
+  Gain[ 3]:   8.2363
+  Gain[ 4]:  18.9279
+  Gain[ 5]:   1.6972
+  Gain[ 6]:   0.7999
+  Gain[ 7]:   0.6438
+  Gain[ 8]:   6.4728
+  Gain[ 9]:   8.2378
+  Gain[10]:   2.3773
+  Gain[11]:   0.5543
+  Gain[12]:   0.4625
+  Gain[13]:   0.2011
+  Gain[14]:   2.4998
+  Gain[15]:   2.6701
+  Gain[16]:   5.7692
+  Gain[17]:   0.0086
+  Gain[18]:   0.0065
+  Gain[19]:   0.0036
+
+PID Gains Statistics:
+  Gain[ 0]: mean=  1.2394, std=  0.3596, min=  0.5000, max=  1.5000
+  Gain[ 1]: mean=  0.8512, std=  0.3108, min=  0.4000, max=  1.2000
+  Gain[ 2]: mean=  9.8322, std=  1.8778, min=  7.0004, max= 14.0000
+  Gain[ 3]: mean=  8.9404, std=  0.7413, min=  6.5005, max=  9.9996
+  Gain[ 4]: mean= 18.9155, std=  1.2757, min= 18.0000, max= 22.0000
+  Gain[ 5]: mean=  1.6713, std=  0.1828, min=  1.2000, max=  1.8000
+  Gain[ 6]: mean=  0.4577, std=  0.1085, min=  0.3000, max=  0.8000
+  Gain[ 7]: mean=  0.8207, std=  0.1842, min=  0.6000, max=  1.2000
+  Gain[ 8]: mean=  8.6446, std=  1.6717, min=  6.0000, max= 10.0000
+  Gain[ 9]: mean=  9.1636, std=  1.3931, min=  6.0000, max= 10.0000
+  Gain[10]: mean=  2.7299, std=  0.6059, min=  2.0000, max=  4.0000
+  Gain[11]: mean=  0.4746, std=  0.0555, min=  0.4000, max=  0.6000
+  Gain[12]: mean=  0.4904, std=  0.0568, min=  0.4000, max=  0.6000
+  Gain[13]: mean=  0.3531, std=  0.0791, min=  0.2000, max=  0.5000
+  Gain[14]: mean=  3.3057, std=  0.6345, min=  2.0000, max=  4.0000
+  Gain[15]: mean=  2.8077, std=  0.5356, min=  2.0000, max=  4.0000
+  Gain[16]: mean=  5.2854, std=  0.6047, min=  4.0000, max=  6.0000
+  Gain[17]: mean=  0.0071, std=  0.0015, min=  0.0060, max=  0.0100
+  Gain[18]: mean=  0.0092, std=  0.0013, min=  0.0060, max=  0.0100
+  Gain[19]: mean=  0.0045, std=  0.0019, min=  0.0030, max=  0.0080

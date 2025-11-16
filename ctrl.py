@@ -416,5 +416,5 @@ class Control:
         if 'rate_D_gains' in gains_from_action:
             self.rate_D_gain = np.maximum(np.array(gains_from_action['rate_D_gains']), 0.0)  # D增益可以为0
             
-        # 更新偏航权重（基于新的姿态增益）
+        # 更新偏航权重 
         self.setYawWeight()

@@ -28,7 +28,7 @@ from px4Env import QuadcopterEnv
 # ============================================================
 parser = argparse.ArgumentParser(description='Batch Evaluation for PPO Policy')
 parser.add_argument('--ckpt', type=str, 
-                    default="./logs/log_train_results/1001/251031-220741/best_policy.pth",
+                    default="./logs/log_train_results/1012/251031-220741/best_policy.pth",
                     help='Checkpoint path')
 parser.add_argument('--num-episodes', type=int, default=10,
                     help='Number of episodes to evaluate')
@@ -68,7 +68,7 @@ print(f"   Device: {device}")
 # ============================================================
 # 2️⃣ 设置随机种子
 # ============================================================
-seed = cmd_args.seed if cmd_args.seed is not None else args.get("seed", 1001)
+seed = cmd_args.seed if cmd_args.seed is not None else args.get("seed", 1012)
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)
@@ -85,7 +85,7 @@ print("=" * 80)
 
 env = QuadcopterEnv(
     control_type=args.get("control_type", "xyz_vel"),
-    trajectory_type=args.get("trajectory_type", 1001),
+    trajectory_type=args.get("trajectory_type", 1012),
     yaw_type=args.get("yaw_type", 3),
     dt=args.get("sim_dt", args.get("dt", 0.01)),
     max_episode_steps=args.get("max_episode_steps", 3000),
