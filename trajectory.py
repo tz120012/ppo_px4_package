@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-四旋翼轨迹生成器 - 重构版
-支持速度跟踪和位置跟踪的强化学习训练轨迹
+四旋翼轨迹生成器 - 精简版
+仅保留核心训练轨迹
 
 作者: John Bass (原始版本)
-重构: 添加了完整的RL训练轨迹库
-更新: 拆分速度轨迹100为1001/1002/1003，拆分101为1011/1012
+精简版本: 
+  速度轨迹: 1001(俯仰阶跃), 1012/1013/1014(正弦扫频系列)
+  位置轨迹: 201(方形), 202(8字), 203(螺旋), 206(3D李萨如)
 """
 
 import numpy as np
@@ -57,29 +58,17 @@ class Trajectory:
         - "xy_vel_z_pos": 混合模式（XY速度 + Z位置）
     
     轨迹类型编码 (xyzType):
-        速度跟踪轨迹 (100-199):
-            *** 新拆分轨迹 ***
-            * 1001: 俯仰轴阶跃测试 (25秒) - 0->3->0->8->15 m/s
-            1002: 滚转轴阶跃测试 (30秒)
-            1003: 俯仰-滚转耦合阶跃测试 (30秒)
-            1011: 正弦扫频扫幅 - 低频段 (30秒)
-            * 1012: 正弦扫频扫幅 - 高频段 (30秒)
-            
-            *** 其他轨迹 ***
-            102: 方波速度
-            103: 三角波速度
-            104: 随机组合速度
-            105: 3D李萨如速度
+        速度跟踪轨迹:
+            1001: 俯仰轴阶跃测试 (30秒周期) - 0->3->0->8->15->0 m/s
+            1012: 正弦扫频扫幅 - 高频段 (30秒周期，幅值3-15m/s，频率0.1-0.5Hz)
+            1013: 正弦扫频 (30秒周期，频率固定0.3Hz，幅值线性3→18m/s)
+            1014: 正弦扫频 (30秒周期，幅值固定8m/s，频率线性0.1→0.5Hz)
         
-        位置跟踪轨迹 (200-299):
-            200: 定高随机阶跃
-            * 201: 典型轨迹组合（8字+螺旋+圆形）
-            202: 圆形轨迹
-            * 203: 8字轨迹
-            204: 方形轨迹
-            205: 螺旋上升
-            206: 3D李萨如
-            207: 随机多项式轨迹
+        位置跟踪轨迹:
+            201: 方形航线 (15秒，边长36m，从初始位置开始)
+            202: 8字航线 (15秒，以初始位置为中心)
+            203: 螺旋爬升航线 (30秒，3圈，从初始位置开始上升10m)
+            206: 3D李萨如曲线（30秒周期）
     
     航向类型 (yawType):
         0: 固定航向（0度）
@@ -167,103 +156,70 @@ class Trajectory:
         return vel_limited
 
     def _init_velocity_trajectories(self):
-        """初始化速度跟踪轨迹参数"""
+        """初始化速度跟踪轨迹参数 - 仅保留 1001 和 1012"""
         
-        # ==================== 新拆分轨迹参数 ====================
-        if self.xyzType in [1001, 1002, 1003]:
-            # 统一序列：每段 5s，序列为 0 -> 3 -> 0 -> 8 -> 15 -> 0 （总 30s）
+        if self.xyzType == 1001:
+            # 俯仰轴阶跃测试：每段 5s，序列为 0 -> 3 -> 0 -> 8 -> 15 -> 0 （总 30s）
             self.step_duration = 5.0
             self.step_sequence = [0.0, 3.0, 0.0, 8.0, 15.0, 0.0]
             self.num_steps = len(self.step_sequence)
             self.total_seq_time = self.step_duration * self.num_steps
-            # 耦合时 roll = pitch * roll_pitch_ratio
-            self.roll_pitch_ratio = 0.6
             self.current_step = 0
             self.last_cycle_start_time = 0
             self.current_vel_target = np.zeros(3)
         
-        elif self.xyzType in [1011, 1012]:
-            # 正弦扫频扫幅 - 拆分版（各30秒）
-            self.vel_amplitude_min = 3.0
+        elif self.xyzType in (1012, 1013, 1014):
+            # 正弦扫频系列
             self.vel_axis_ratio = np.array([1.0, 0.0, 0.0])
-            self.vel_phase = np.array([0, pi/3, 2*pi/3])
-            # 确保对 1012 使用 0.05 - 0.2 Hz，并引入参考时间以保证周期性（30s）与不随全局时间累增
-            if self.xyzType == 1011:
-                # 低频段：0.01 - 0.055 Hz
-                self.vel_amplitude_max = 15.0
-                self.vel_amplitude_period = 30.0
-                self.vel_freq_min = 0.01
-                self.vel_freq_max = 0.055
-                self.vel_freq_period = 30.0
-            else:  # 1012
-                # 高频段：幅值 3-15 m/s，频率 0.1-0.5 Hz，周期 30s
-                self.vel_amplitude_max = 15.0
-                self.vel_amplitude_period = 30.0
-                self.vel_freq_min = 0.1
-                self.vel_freq_max = 0.5
-                self.vel_freq_period = 30.0
-            # 参考时间：首次计算时记录，之后所有扫频以相对时间 (t - ref) 为基础
+
+            if self.xyzType == 1012:
+                # 幅值：3-15 m/s，频率：0.1-0.5 Hz（高频段扫幅）
+                self.vel_phase = np.array([0, pi/3, 2*pi/3])
+                self._sine_sweep_config = {
+                    "amp_mode": "triangle",
+                    "amp_min": 3.0,
+                    "amp_max": 15.0,
+                    "amp_period": 30.0,
+                    "freq_mode": "linear",
+                    "freq_min": 0.1,
+                    "freq_max": 0.5,
+                    "freq_period": 30.0,
+                }
+
+            elif self.xyzType == 1013:
+                # 幅值：3→18 m/s 线性增加，频率固定 0.3 Hz
+                self.vel_phase = np.zeros(3)
+                self._sine_sweep_config = {
+                    "amp_mode": "linear",
+                    "amp_min": 3.0,
+                    "amp_max": 18.0,
+                    "amp_period": 30.0,
+                    "freq_mode": "fixed",
+                    "freq_value": 0.3,
+                }
+
+            else:  # 1014
+                # 幅值固定 8 m/s，频率：0.1→0.5 Hz 线性增加
+                self.vel_phase = np.zeros(3)
+                self._sine_sweep_config = {
+                    "amp_mode": "fixed",
+                    "amp_value": 8.0,
+                    "freq_mode": "linear",
+                    "freq_min": 0.1,
+                    "freq_max": 0.5,
+                    "freq_period": 30.0,
+                }
+
+            # 参考时间与累积相位初始化
             self._sine_sweep_ref_time = None
-            # 累积相位，用于正确计算正弦波
             self._sine_sweep_phase_accum = 0.0
             self._sine_sweep_last_t = None
 
-        # ==================== 原有轨迹参数（保留兼容性） ====================
-        elif self.xyzType == 100:
-            # 原完整版（90秒）
-            self.vel_step_duration = 5.0
-            self.vel_zero_duration = 5.0
-            self.vel_cycle_time = 10.0
-            self.vel_levels = [2.0, 5.0, 10.0]
-            self.num_steps = len(self.vel_levels)
-            self.roll_pitch_ratio = 0.6
-            self.current_step = 0
-            self.last_cycle_start_time = 0
-            self.current_vel_target = np.zeros(3)
-            self.phase1_end = self.num_steps * self.vel_cycle_time
-            self.phase2_end = 2 * self.num_steps * self.vel_cycle_time
-            self.phase3_end = 3 * self.num_steps * self.vel_cycle_time
-        
-        elif self.xyzType == 101:
-            # 原完整版（60秒）
-            self.vel_amplitude_min = 3.0
-            self.vel_amplitude_max = 10.0
-            self.vel_amplitude_period = 30.0
-            self.vel_freq_min = 0.01
-            self.vel_freq_max = 0.1
-            self.vel_freq_period = 60.0
-            self.vel_axis_ratio = np.array([0.6, 0.5, 0.3])
-            self.vel_phase = np.array([0, pi/3, 2*pi/3])
-        
-        # ==================== 其他轨迹 ====================
-        elif self.xyzType == 102:
-            # 方波速度
-            self.square_wave_period = 10.0
-            self.square_wave_amplitude = 5.0
-            self.square_wave_axes = [True, True, False]
-        
-        elif self.xyzType == 103:
-            # 三角波速度
-            self.triangle_wave_period = 8.0
-            self.triangle_wave_amplitude = 6.0
-            self.triangle_wave_axes = [True, True, True]
-        
-        elif self.xyzType == 104:
-            # 随机组合速度
-            np.random.seed(42)
-            self.random_vel_duration = 5.0
-            self.random_vel_max = 8.0
-            self.last_random_time = 0
-            self.current_random_vel = np.zeros(3)
-        
-        elif self.xyzType == 105:
-            # 3D李萨如速度曲线
-            self.lissajous_vel_amp = np.array([5.0, 4.0, 2.0])
-            self.lissajous_vel_freq = np.array([0.5, 0.7, 0.3])
-            self.lissajous_vel_phase = np.array([0, pi/4, pi/2])
+        else:
+            raise ValueError(f"不支持的速度轨迹类型: {self.xyzType}，仅支持 1001、1012、1013、1014")
 
     def _init_position_trajectories(self):
-        """初始化位置跟踪轨迹参数"""
+        """初始化位置跟踪轨迹参数 - 支持 201/202/203 和 206"""
         
         # 计算航段时间
         self.T_segment = np.diff(self.t_wps)
@@ -277,82 +233,29 @@ class Trajectory:
             self.t_wps = np.zeros(len(self.T_segment) + 1)
             self.t_wps[1:] = np.cumsum(self.T_segment)
         
-        if self.xyzType == 200:
-            # 定高随机阶跃
-            self.pos_step_time = 5.0
-            self.pos_height = 2.0
-            self.pos_step_min = 2.0
-            self.pos_step_max = 10.0
-            self.last_pos_step_time = 0
-            self.current_pos_target = np.array([0, 0, self.pos_height])
-            np.random.seed(123)
-        
-        elif self.xyzType == 201:
-            # 典型轨迹组合
+        if self.xyzType == 201:
+            # 方形航线（15秒）
             self.phase_duration = 15.0
+            self.traj_start_pos = self.quad.pos.copy()
+            self._setup_square_params()
         
         elif self.xyzType == 202:
-            # 圆形轨迹
-            self.circle_radius = 8.0
-            self.circle_omega = 0.3
-            self.circle_height = 2.0
-            self.circle_center = np.array([0., 0.])
+            # 8字航线（15秒）
+            self.phase_duration = 15.0
+            self.traj_start_pos = self.quad.pos.copy()
+            self._setup_eight_params()
         
         elif self.xyzType == 203:
-            # 8字轨迹
-            self.eight_amp_x = 6.0
-            self.eight_amp_y = 4.0
-            self.eight_omega = 0.4
-            self.eight_height = 2.5
+            # 螺旋爬升航线（30秒，3圈）
+            self.phase_duration = 30.0
+            self.traj_start_pos = self.quad.pos.copy()
+            self._setup_helix_params()
         
-        elif self.xyzType == 204:
-            # 方形轨迹
-            self.square_size = 10.0
-            self.square_velocity = 2.0
-            self.square_height = 2.0
-            self.square_waypoints = np.array([
-                [0, 0],
-                [self.square_size, 0],
-                [self.square_size, self.square_size],
-                [0, self.square_size],
-                [0, 0]
-            ])
-            self.square_total_length = 4 * self.square_size
-        
-        elif self.xyzType == 205:
-            # 螺旋上升
-            self.helix_radius = 5.0
-            self.helix_omega = 0.5
-            self.helix_climb_rate = 0.5
-            self.helix_initial_height = 1.0
-            self.helix_max_height = 5.0
-        
-        # elif self.xyzType == 206:
-        #     # 3D李萨如
-        #     # self.lissajous_amp = np.array([5.0, 4.0, 1.5])
-        #     self.lissajous_amp = np.array([20.0, 8.0, 3.0])
-        #     self.lissajous_freq = np.array([2, 3, 3])
-        #     # self.lissajous_phase = np.array([-pi/2, pi/2, 0])
-        #     self.lissajous_center = np.array([0., 0., 10.0])
-        
-        #     # 根据四旋翼初始位置计算相位偏移，使得 t=0 时轨迹经过初始位置
-        #     init_offset = self.quad.pos - self.lissajous_center  # 使用 self.quad
-        #     self.lissajous_phase = np.zeros(3)
-            
-        #     for i in range(3):
-        #         if abs(self.lissajous_amp[i]) > 1e-6:
-        #             # 从位置反算相位：pos[i] = center[i] + amp[i]*sin(phase[i])
-        #             # 因此：sin(phase[i]) = (pos[i] - center[i]) / amp[i]
-        #             sin_val = np.clip(init_offset[i] / self.lissajous_amp[i], -1.0, 1.0)
-        #             self.lissajous_phase[i] = np.arcsin(sin_val)
-        #         else:
-        #             self.lissajous_phase[i] = 0.0
-
         elif self.xyzType == 206:
             # 3D李萨如（循环轨迹，30s为周期）
-            self.lissajous_amp = np.array([33.0, 6.0, 3.0])
+            self.lissajous_amp = np.array([40.0, 10.0, 10.0])
             # 频率整数比，配合周期得到各轴角频率：omega_i = 2π * freq[i] / period
-            self.lissajous_freq = np.array([2, 3, 3])
+            self.lissajous_freq = np.array([3, 1, 1])
             self.lissajous_period = 30.0
             self.lissajous_center = np.array([0., 0., 10.0])
 
@@ -432,33 +335,16 @@ class Trajectory:
                 verify_vel[i] = self.lissajous_amp[i] * omega * np.cos(self.lissajous_phase[i])
             # print(f"  初始速度: {verify_vel}")
             # print(f"  速度幅值: {np.linalg.norm(verify_vel):.2f} m/s")
-
-        elif self.xyzType == 207:
-            # 随机多项式轨迹
-            np.random.seed(456)
-            self.poly_duration = 20.0
-            self.poly_degree = 5
-            self.poly_v_max = 5.0
-            self.poly_a_max = 3.0
-            self._generate_random_polynomial()
         
-        elif self.xyzType == 208:
-            # 航点巡航
-            self.waypoint_list = np.array([
-                [0, 0, 2],
-                [10, 5, 2.5],
-                [15, -3, 3],
-                [8, -10, 2.5],
-                [0, 0, 2]
-            ])
-            self.waypoint_velocity = 3.0
+        else:
+            raise ValueError(f"不支持的位置轨迹类型: {self.xyzType}，仅支持 201 和 206")
 
     # ========================================================================
-    # 速度跟踪轨迹生成方法 (新拆分版本)
+    # 速度跟踪轨迹生成方法 - 仅保留 1001 和 1012
     # ========================================================================
     
     def _vel_pitch_only_step(self, t):
-        """xyzType=1001: 俯仰轴阶跃测试（循环，25秒周期：0->3->0->8->15 m/s，每段5s）"""
+        """xyzType=1001: 俯仰轴阶跃测试（30秒周期：0->3->0->8->15->0 m/s，每段5s）"""
         desVel = np.zeros(3)
         if self.num_steps == 0 or self.step_duration <= 0:
             return desVel
@@ -466,32 +352,8 @@ class Trajectory:
         desVel[0] = float(self.step_sequence[idx])
         return desVel
     
-    def _vel_roll_only_step(self, t):
-        """xyzType=1002: 滚转轴阶跃测试（循环，不再仅限 30s）"""
-        desVel = np.zeros(3)
-        if self.num_steps == 0 or self.step_duration <= 0:
-            return desVel
-        idx = int(t // self.step_duration) % self.num_steps
-        desVel[1] = float(self.step_sequence[idx])
-        return desVel
-    
-    def _vel_coupled_step(self, t):
-        """xyzType=1003: 俯仰-滚转耦合阶跃测试（循环，不再仅限 30s）"""
-        desVel = np.zeros(3)
-        if self.num_steps == 0 or self.step_duration <= 0:
-            return desVel
-        idx = int(t // self.step_duration) % self.num_steps
-        v = float(self.step_sequence[idx])
-        desVel[0] = v
-        desVel[1] = v * self.roll_pitch_ratio
-        return desVel
-
-    def _vel_sine_sweep_low_freq(self, t):
-        """xyzType=1011: 正弦扫频扫幅 - 低频段（30秒）"""
-        return self._vel_sine_sweep_generic(t)
-    
     def _vel_sine_sweep_high_freq(self, t):
-        """xyzType=1012: 正弦扫频扫幅 - 高频段（30秒）"""
+        """正弦扫频系列（1012/1013/1014）"""
         return self._vel_sine_sweep_generic(t)
     
     def _vel_sine_sweep_generic(self, t):
@@ -522,13 +384,36 @@ class Trajectory:
             dt = 0.0
         self._sine_sweep_last_t = t
         
-        # 幅值扫描（三角波） 使用相对时间 tt
-        amp_ratio = np.abs((tt % self.vel_amplitude_period) / self.vel_amplitude_period * 2 - 1)
-        current_amp = self.vel_amplitude_min + (self.vel_amplitude_max - self.vel_amplitude_min) * amp_ratio
-        
-        # 频率扫描（线性） 使用相对时间 tt，确保每 self.vel_freq_period 为一个周期
-        freq_ratio = (tt % self.vel_freq_period) / self.vel_freq_period
-        current_freq = self.vel_freq_min + (self.vel_freq_max - self.vel_freq_min) * freq_ratio
+        cfg = getattr(self, "_sine_sweep_config", None)
+        if cfg is None:
+            raise ValueError("正弦扫频配置未初始化")
+
+        # 幅值调度
+        amp_mode = cfg.get("amp_mode", "triangle")
+        if amp_mode == "triangle":
+            period = max(cfg.get("amp_period", 30.0), 1e-6)
+            amp_ratio = np.abs((tt % period) / period * 2 - 1)
+            current_amp = cfg["amp_min"] + (cfg["amp_max"] - cfg["amp_min"]) * amp_ratio
+        elif amp_mode == "linear":
+            period = max(cfg.get("amp_period", 30.0), 1e-6)
+            amp_ratio = (tt % period) / period
+            current_amp = cfg["amp_min"] + (cfg["amp_max"] - cfg["amp_min"]) * amp_ratio
+        elif amp_mode == "fixed":
+            current_amp = cfg["amp_value"]
+        else:
+            raise ValueError(f"未知的幅值调度模式: {amp_mode}")
+
+        # 频率调度
+        freq_mode = cfg.get("freq_mode", "linear")
+        if freq_mode == "linear":
+            period = max(cfg.get("freq_period", 30.0), 1e-6)
+            freq_ratio = (tt % period) / period
+            current_freq = cfg["freq_min"] + (cfg["freq_max"] - cfg["freq_min"]) * freq_ratio
+        elif freq_mode == "fixed":
+            current_freq = cfg["freq_value"]
+        else:
+            raise ValueError(f"未知的频率调度模式: {freq_mode}")
+
         omega = 2 * pi * current_freq
         
         # 累积相位（积分频率）
@@ -546,148 +431,93 @@ class Trajectory:
         return desVel, desAcc
 
     # ========================================================================
-    # 速度跟踪轨迹生成方法 (原有版本 - 保留兼容性)
+    # 位置跟踪轨迹生成方法 - 支持 201/202/203 和 206
     # ========================================================================
     
-    def _vel_pitch_roll_step(self, t):
-        """xyzType=100: 俯仰-滚转阶跃测试（完整90秒）"""
-        desVel = np.zeros(3)
+    def _setup_square_params(self):
+        """为轨迹201(方形)设置参数"""
+        start_pos = self.traj_start_pos
+        side_length = 36.0  # 增加到36米，x向最大速度约18 m/s
         
-        if t < self.phase1_end:
-            phase_time = t
-            phase_mode = 1
-        elif t < self.phase2_end:
-            phase_time = t - self.phase1_end
-            phase_mode = 2
-        elif t < self.phase3_end:
-            phase_time = t - self.phase2_end
-            phase_mode = 4
-        else:
-            return desVel
-        
-        current_step = int(phase_time // self.vel_cycle_time)
-        if current_step >= self.num_steps:
-            current_step = self.num_steps - 1
-        
-        time_in_cycle = phase_time - current_step * self.vel_cycle_time
-        current_vel = self.vel_levels[current_step]
-        is_step_phase = (time_in_cycle < self.vel_step_duration)
-        
-        if phase_mode == 1:  # 仅俯仰
-            desVel[0] = current_vel if is_step_phase else 0.0
-        elif phase_mode == 2:  # 仅滚转
-            desVel[1] = current_vel if is_step_phase else 0.0
-        elif phase_mode == 4:  # 耦合
-            if is_step_phase:
-                desVel[0] = current_vel
-                desVel[1] = current_vel * self.roll_pitch_ratio
-        
-        return desVel
+        # 方形航线：从起点开始，逆时针绘制正方形
+        self.square_corners = np.array([
+            start_pos,  # 起点
+            start_pos + np.array([side_length, 0, 0]),      # 右
+            start_pos + np.array([side_length, side_length, 0]),  # 右上
+            start_pos + np.array([0, side_length, 0]),      # 上
+        ])
     
-    def _vel_sine_sweep(self, t):
-        """xyzType=101: 正弦扫频扫幅（完整60秒）"""
-        return self._vel_sine_sweep_generic(t)
+    def _setup_eight_params(self):
+        """为轨迹202(8字)设置参数"""
+        start_pos = self.traj_start_pos
+        self.eight_center = start_pos.copy()
+        self.eight_A = 43.0  # X方向最大速度约 18 m/s
+        self.eight_B = 12.0
     
-    def _vel_square_wave(self, t):
-        """xyzType=102: 方波速度"""
-        desVel = np.zeros(3)
-        
-        for i in range(3):
-            if self.square_wave_axes[i]:
-                phase = (t % self.square_wave_period) / self.square_wave_period
-                desVel[i] = self.square_wave_amplitude if phase < 0.5 else -self.square_wave_amplitude
-        
-        return desVel
+    def _setup_helix_params(self):
+        """为轨迹203(螺旋)设置参数 - 30秒3圈"""
+        start_pos = self.traj_start_pos
+        self.helix_center = start_pos.copy()
+        self.helix_radius = 24.0  # X方向最大速度约 15 m/s (24 × 3×2π/30 ≈ 15.1)
+        self.helix_num_circles = 3  # 3圈
+        self.helix_climb_rate = 10.0 / self.phase_duration  # 30秒内爬升10米
     
-    def _vel_triangle_wave(self, t):
-        """xyzType=103: 三角波速度"""
-        desVel = np.zeros(3)
-        desAcc = np.zeros(3)
-        
-        for i in range(3):
-            if self.triangle_wave_axes[i]:
-                phase = (t % self.triangle_wave_period) / self.triangle_wave_period
-                if phase < 0.25:
-                    desVel[i] = self.triangle_wave_amplitude * (4 * phase)
-                    desAcc[i] = self.triangle_wave_amplitude * 4 / self.triangle_wave_period
-                elif phase < 0.75:
-                    desVel[i] = self.triangle_wave_amplitude * (2 - 4 * phase)
-                    desAcc[i] = -self.triangle_wave_amplitude * 4 / self.triangle_wave_period
-                else:
-                    desVel[i] = self.triangle_wave_amplitude * (4 * phase - 4)
-                    desAcc[i] = self.triangle_wave_amplitude * 4 / self.triangle_wave_period
-        
-        return desVel, desAcc
+    def _pos_square_only(self, t):
+        """xyzType=201: 方形航线（15秒）"""
+        t_cycle = np.mod(t, self.phase_duration)
+        self._pos_square(t_cycle)
     
-    def _vel_random_combined(self, t):
-        """xyzType=104: 随机组合速度"""
-        if t >= self.last_random_time + self.random_vel_duration:
-            self.current_random_vel = np.random.uniform(
-                -self.random_vel_max, 
-                self.random_vel_max, 
-                3
-            )
-            self.current_random_vel[2] *= 0.5
-            self.last_random_time = t
-        
-        return self.current_random_vel
+    def _pos_eight_only(self, t):
+        """xyzType=202: 8字航线（15秒）"""
+        t_cycle = np.mod(t, self.phase_duration)
+        self._pos_lissajous_eight(t_cycle)
     
-    def _vel_lissajous_3d(self, t):
-        """xyzType=105: 3D李萨如速度曲线"""
-        desVel = np.zeros(3)
-        desAcc = np.zeros(3)
-        
-        for i in range(3):
-            omega = 2 * pi * self.lissajous_vel_freq[i]
-            desVel[i] = self.lissajous_vel_amp[i] * np.sin(omega * t + self.lissajous_vel_phase[i])
-            desAcc[i] = self.lissajous_vel_amp[i] * omega * np.cos(omega * t + self.lissajous_vel_phase[i])
-        
-        return desVel, desAcc
-
-    # ========================================================================
-    # 位置跟踪轨迹生成方法 (200-299)
-    # ========================================================================
+    def _pos_helix_only(self, t):
+        """xyzType=203: 螺旋爬升航线（15秒）"""
+        t_cycle = np.mod(t, self.phase_duration)
+        self._pos_helix(t_cycle)
     
-    def _pos_random_step(self, t):
-        """xyzType=200: 定高随机阶跃"""
-        if t >= self.last_pos_step_time + self.pos_step_time:
-            distance = 0.0
-            direction = np.array([1.0, 0.0])
-            while distance < self.pos_step_min or distance > self.pos_step_max:
-                theta = np.random.uniform(0.0, 2.0 * pi)
-                distance = np.random.uniform(self.pos_step_min, self.pos_step_max)
-                direction = np.array([np.cos(theta), np.sin(theta)])
-            
-            new_xy = self.current_pos_target[:2] + distance * direction
-            self.current_pos_target = np.array([new_xy[0], new_xy[1], self.pos_height])
-            self.last_pos_step_time = t
+    def _pos_square(self, t):
+        """方形航线（内部方法）- 从初始位置开始，逆时针绘制方形"""
+        corner_time = self.phase_duration / 4  # 每条边用1/4时间
         
-        self.desPos = self.current_pos_target.copy()
-        self.desVel = np.zeros(3)
-        self.desAcc = np.zeros(3)
-    
-    def _pos_typical_combined(self, t):
-        """xyzType=201: 典型轨迹组合（8字+螺旋+圆形）"""
-        total_cycle_time = 3 * self.phase_duration
-        t_cycle = np.mod(t, total_cycle_time)
+        # 确定当前在哪条边
+        segment = int(t / corner_time)
+        segment = min(segment, 3)  # 防止溢出
+        t_local = t - segment * corner_time
         
-        if t_cycle < self.phase_duration:
-            self._pos_lissajous_eight(t_cycle)
-        elif t_cycle < 2 * self.phase_duration:
-            self._pos_helix(t_cycle - self.phase_duration)
-        else:
-            self._pos_circle_internal(t_cycle - 2 * self.phase_duration)
+        # 当前边的起点和终点
+        start_corner = self.square_corners[segment]
+        end_corner = self.square_corners[(segment + 1) % 4]
+        
+        # 使用五次多项式进行平滑插值
+        s = t_local / corner_time  # 归一化时间 [0, 1]
+        s = np.clip(s, 0, 1)
+        
+        # 五次多项式：确保位置、速度、加速度在端点连续
+        # p(s) = 10s³ - 15s⁴ + 6s⁵
+        poly = 10*s**3 - 15*s**4 + 6*s**5
+        poly_dot = (30*s**2 - 60*s**3 + 30*s**4) / corner_time
+        poly_ddot = (60*s - 180*s**2 + 120*s**3) / (corner_time**2)
+        
+        # 位置、速度、加速度
+        self.desPos = start_corner + (end_corner - start_corner) * poly
+        self.desVel = (end_corner - start_corner) * poly_dot
+        self.desAcc = (end_corner - start_corner) * poly_ddot
     
     def _pos_lissajous_eight(self, t):
-        """李萨如8字轨迹（内部方法）"""
-        A, B = 18.0, 14.0
+        """李萨如8字轨迹（内部方法）- 从起点位置开始"""
+        A = self.eight_A
+        B = self.eight_B
         freq_ratio = 2
-        omega = 2 * pi / self.phase_duration
-        height = 2.0
+        omega = 2 * pi / self.phase_duration  # 一个完整周期
         
-        self.desPos[0] = A * np.sin(omega * t)
-        self.desPos[1] = B * np.sin(freq_ratio * omega * t)
-        self.desPos[2] = height
+        # 8字轨迹以起点为中心
+        center = self.eight_center
+        
+        self.desPos[0] = center[0] + A * np.sin(omega * t)
+        self.desPos[1] = center[1] + B * np.sin(freq_ratio * omega * t)
+        self.desPos[2] = center[2]
         
         self.desVel[0] = A * omega * np.cos(omega * t)
         self.desVel[1] = B * freq_ratio * omega * np.cos(freq_ratio * omega * t)
@@ -698,15 +528,27 @@ class Trajectory:
         self.desAcc[2] = 0
     
     def _pos_helix(self, t):
-        """螺旋轨迹（内部方法）"""
-        radius = 12.0
-        omega = 4 * pi / self.phase_duration
-        climb_rate = 6.0 / self.phase_duration
-        initial_height = 2.0
+        """螺旋爬升轨迹（内部方法）- 从起点位置开始螺旋上升，30秒3圈"""
+        radius = self.helix_radius
+        num_circles = getattr(self, 'helix_num_circles', 1)  # 默认1圈，向下兼容
+        omega = num_circles * 2 * pi / self.phase_duration  # 角频率 = 圈数 × 2π / 周期
+        climb_rate = self.helix_climb_rate
         
-        self.desPos[0] = radius * np.cos(omega * t)
-        self.desPos[1] = radius * np.sin(omega * t)
-        self.desPos[2] = initial_height + climb_rate * t
+        # 螺旋的圆心应该偏移，使得t=0时螺旋正好经过初始位置
+        # 如果初始位置是 (x0, y0, z0)，且螺旋在t=0时应该在初始位置
+        # 那么圆心应该在 (x0 - radius, y0, z0)
+        center = self.helix_center
+        initial_height = center[2]
+        
+        # 螺旋圆心向左偏移radius，使得t=0时螺旋经过起点
+        circle_center_x = center[0] - radius
+        circle_center_y = center[1]
+        
+        # Z轴高度：在周期内上升，然后重置（周期性）
+        # 使用 t 而不是 t_cycle，因为 t 已经在调用函数中被mod过了
+        self.desPos[0] = circle_center_x + radius * np.cos(omega * t)
+        self.desPos[1] = circle_center_y + radius * np.sin(omega * t)
+        self.desPos[2] = initial_height + climb_rate * t  # t已经是周期内的时间
         
         self.desVel[0] = -radius * omega * np.sin(omega * t)
         self.desVel[1] = radius * omega * np.cos(omega * t)
@@ -734,90 +576,6 @@ class Trajectory:
         self.desAcc[1] = -radius * omega**2 * np.sin(omega * t)
         self.desAcc[2] = 0
     
-    def _pos_circle(self, t):
-        """xyzType=202: 独立圆形轨迹"""
-        omega = self.circle_omega
-        
-        self.desPos[0] = self.circle_center[0] + self.circle_radius * np.cos(omega * t)
-        self.desPos[1] = self.circle_center[1] + self.circle_radius * np.sin(omega * t)
-        self.desPos[2] = self.circle_height
-        
-        self.desVel[0] = -self.circle_radius * omega * np.sin(omega * t)
-        self.desVel[1] = self.circle_radius * omega * np.cos(omega * t)
-        self.desVel[2] = 0
-        
-        self.desAcc[0] = -self.circle_radius * omega**2 * np.cos(omega * t)
-        self.desAcc[1] = -self.circle_radius * omega**2 * np.sin(omega * t)
-        self.desAcc[2] = 0
-    
-    def _pos_figure_eight(self, t):
-        """xyzType=203: 8字轨迹"""
-        omega = self.eight_omega
-        
-        self.desPos[0] = self.eight_amp_x * np.sin(omega * t)
-        self.desPos[1] = self.eight_amp_y * np.sin(2 * omega * t)
-        self.desPos[2] = self.eight_height
-        
-        self.desVel[0] = self.eight_amp_x * omega * np.cos(omega * t)
-        self.desVel[1] = self.eight_amp_y * 2 * omega * np.cos(2 * omega * t)
-        self.desVel[2] = 0
-        
-        self.desAcc[0] = -self.eight_amp_x * omega**2 * np.sin(omega * t)
-        self.desAcc[1] = -self.eight_amp_y * 4 * omega**2 * np.sin(2 * omega * t)
-        self.desAcc[2] = 0
-    
-    def _pos_square(self, t):
-        """xyzType=204: 方形轨迹"""
-        perimeter = self.square_total_length
-        period = perimeter / self.square_velocity
-        t_mod = np.mod(t, period)
-        distance = self.square_velocity * t_mod
-        
-        side_length = self.square_size
-        if distance < side_length:
-            x = distance
-            y = 0
-            vx, vy = self.square_velocity, 0
-        elif distance < 2 * side_length:
-            x = side_length
-            y = distance - side_length
-            vx, vy = 0, self.square_velocity
-        elif distance < 3 * side_length:
-            x = side_length - (distance - 2 * side_length)
-            y = side_length
-            vx, vy = -self.square_velocity, 0
-        else:
-            x = 0
-            y = side_length - (distance - 3 * side_length)
-            vx, vy = 0, -self.square_velocity
-        
-        self.desPos = np.array([x, y, self.square_height])
-        self.desVel = np.array([vx, vy, 0.0])
-        self.desAcc = np.zeros(3)
-    
-    def _pos_spiral(self, t):
-        """xyzType=205: 螺旋上升"""
-        omega = self.helix_omega
-        z = self.helix_initial_height + self.helix_climb_rate * t
-        
-        if z > self.helix_max_height:
-            z = self.helix_max_height
-            vz = 0
-        else:
-            vz = self.helix_climb_rate
-        
-        self.desPos[0] = self.helix_radius * np.cos(omega * t)
-        self.desPos[1] = self.helix_radius * np.sin(omega * t)
-        self.desPos[2] = z
-        
-        self.desVel[0] = -self.helix_radius * omega * np.sin(omega * t)
-        self.desVel[1] = self.helix_radius * omega * np.cos(omega * t)
-        self.desVel[2] = vz
-        
-        self.desAcc[0] = -self.helix_radius * omega**2 * np.cos(omega * t)
-        self.desAcc[1] = -self.helix_radius * omega**2 * np.sin(omega * t)
-        self.desAcc[2] = 0
-    
     def _pos_lissajous_3d(self, t):
         """xyzType=206: 3D李萨如（30s周期循环）"""
         # 以固定周期循环，避免仅限前30s
@@ -828,22 +586,6 @@ class Trajectory:
             self.desPos[i] = self.lissajous_center[i] + self.lissajous_amp[i] * np.sin(phase)
             self.desVel[i] = self.lissajous_amp[i] * omega * np.cos(phase)
             self.desAcc[i] = -self.lissajous_amp[i] * omega**2 * np.sin(phase)
-    
-    def _generate_random_polynomial(self):
-        """生成随机多项式轨迹系数"""
-        self.poly_coeff = np.random.randn(3, self.poly_degree + 1) * 0.5
-        self.poly_coeff *= 0.5
-    
-    def _pos_random_polynomial(self, t):
-        """xyzType=207: 随机多项式轨迹"""
-        t_norm = np.mod(t, self.poly_duration) / self.poly_duration
-        
-        for i in range(3):
-            self.desPos[i] = np.polyval(self.poly_coeff[i], t_norm)
-            vel_coeff = np.polyder(self.poly_coeff[i])
-            self.desVel[i] = np.polyval(vel_coeff, t_norm) / self.poly_duration
-            acc_coeff = np.polyder(vel_coeff)
-            self.desAcc[i] = np.polyval(acc_coeff, t_norm) / (self.poly_duration**2)
 
     # ========================================================================
     # 航向控制方法
@@ -888,30 +630,12 @@ class Trajectory:
         
         # ========== 速度控制模式 ==========
         if self.ctrlType in ["xyz_vel", "xy_vel_z_pos"]:
-            # 新拆分轨迹
             if self.xyzType == 1001:
                 self.desVel = self._vel_pitch_only_step(t)
-            elif self.xyzType == 1002:
-                self.desVel = self._vel_roll_only_step(t)
-            elif self.xyzType == 1003:
-                self.desVel = self._vel_coupled_step(t)
-            elif self.xyzType == 1011:
-                self.desVel, self.desAcc = self._vel_sine_sweep_low_freq(t)
-            elif self.xyzType == 1012:
+            elif self.xyzType in (1012, 1013, 1014):
                 self.desVel, self.desAcc = self._vel_sine_sweep_high_freq(t)
-            # 原有轨迹
-            elif self.xyzType == 100:
-                self.desVel = self._vel_pitch_roll_step(t)
-            elif self.xyzType == 101:
-                self.desVel, self.desAcc = self._vel_sine_sweep(t)
-            elif self.xyzType == 102:
-                self.desVel = self._vel_square_wave(t)
-            elif self.xyzType == 103:
-                self.desVel, self.desAcc = self._vel_triangle_wave(t)
-            elif self.xyzType == 104:
-                self.desVel = self._vel_random_combined(t)
-            elif self.xyzType == 105:
-                self.desVel, self.desAcc = self._vel_lissajous_3d(t)
+            else:
+                raise ValueError(f"速度控制模式不支持轨迹类型 {self.xyzType}，仅支持 1001、1012、1013、1014")
             
             # 混合模式
             if self.ctrlType == "xy_vel_z_pos":
@@ -921,22 +645,16 @@ class Trajectory:
         
         # ========== 位置控制模式 ==========
         elif self.ctrlType == "xyz_pos":
-            if self.xyzType == 200:
-                self._pos_random_step(t)
-            elif self.xyzType == 201:
-                self._pos_typical_combined(t)
+            if self.xyzType == 201:
+                self._pos_square_only(t)
             elif self.xyzType == 202:
-                self._pos_circle(t)
+                self._pos_eight_only(t)
             elif self.xyzType == 203:
-                self._pos_figure_eight(t)
-            elif self.xyzType == 204:
-                self._pos_square(t)
-            elif self.xyzType == 205:
-                self._pos_spiral(t)
+                self._pos_helix_only(t)
             elif self.xyzType == 206:
                 self._pos_lissajous_3d(t)
-            elif self.xyzType == 207:
-                self._pos_random_polynomial(t)
+            else:
+                raise ValueError(f"位置控制模式不支持轨迹类型 {self.xyzType}，仅支持 201/202/203 和 206")
             
             # 航向控制
             if self.yawType == 3:
@@ -1006,66 +724,37 @@ if __name__ == "__main__":
     from mpl_toolkits.mplot3d import Axes3D
     from datetime import datetime
 
-    # ========== 测试场景配置 ==========
+    # ========== 测试场景配置（精简版） ==========
     scenarios = [
-        # ===== 新拆分速度轨迹 =====
+        # 速度轨迹
         {"ctrl": "xyz_vel", "xyz": 1001, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Pitch-Only Steps (NEW)"},
-        {"ctrl": "xyz_vel", "xyz": 1002, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Roll-Only Steps (NEW)"},
-        {"ctrl": "xyz_vel", "xyz": 1003, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Coupled Steps (NEW)"},
-        {"ctrl": "xyz_vel", "xyz": 1011, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Sine Sweep Low-Freq (NEW)"},
+         "label": "Vel 1001: Pitch Step (0->3->0->8->15->0)"},
         {"ctrl": "xyz_vel", "xyz": 1012, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Sine Sweep High-Freq (NEW)"},
+         "label": "Vel 1012: Sine Sweep High-Freq (0.1-0.5Hz)"},
+        {"ctrl": "xyz_vel", "xyz": 1013, "yaw": 3, "duration": 30.0, 
+         "label": "Vel 1013: 0.3Hz Sweep (Amplitude 3→18 m/s)"},
+        {"ctrl": "xyz_vel", "xyz": 1014, "yaw": 3, "duration": 30.0, 
+         "label": "Vel 1014: 8 m/s Amplitude, 0.1→0.5Hz"},
         
-        # ===== 原有速度轨迹（对比用） =====
-        {"ctrl": "xyz_vel", "xyz": 100, "yaw": 3, "duration": 90.0, 
-         "label": "Vel: Pitch-Roll Steps (ORIGINAL 90s)"},
-        {"ctrl": "xyz_vel", "xyz": 101, "yaw": 3, "duration": 60.0, 
-         "label": "Vel: Sine Sweep (ORIGINAL 60s)"},
-        
-        # ===== 其他速度轨迹 =====
-        {"ctrl": "xyz_vel", "xyz": 102, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Square Wave"},
-        {"ctrl": "xyz_vel", "xyz": 103, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Triangle Wave"},
-        {"ctrl": "xyz_vel", "xyz": 104, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: Random Combined"},
-        {"ctrl": "xyz_vel", "xyz": 105, "yaw": 3, "duration": 30.0, 
-         "label": "Vel: 3D Lissajous"},
-        
-        # ===== 位置跟踪轨迹 =====
-        {"ctrl": "xyz_pos", "xyz": 200, "yaw": 3, "duration": 60.0, 
-         "label": "Pos: Random Steps"},
+        # 位置轨迹
         {"ctrl": "xyz_pos", "xyz": 201, "yaw": 3, "duration": 45.0, 
-         "label": "Pos: Hybrid Demo"},
-        {"ctrl": "xyz_pos", "xyz": 202, "yaw": 3, "duration": 30.0, 
-         "label": "Pos: Circle"},
-        {"ctrl": "xyz_pos", "xyz": 203, "yaw": 3, "duration": 30.0, 
-         "label": "Pos: Figure-8"},
-        {"ctrl": "xyz_pos", "xyz": 204, "yaw": 3, "duration": 40.0, 
-         "label": "Pos: Square"},
-        {"ctrl": "xyz_pos", "xyz": 205, "yaw": 3, "duration": 40.0, 
-         "label": "Pos: Helix"},
+         "label": "Pos 201: Hybrid (8-Helix-Circle)"},
         {"ctrl": "xyz_pos", "xyz": 206, "yaw": 3, "duration": 30.0, 
-         "label": "Pos: 3D Lissajous"},
-        {"ctrl": "xyz_pos", "xyz": 207, "yaw": 3, "duration": 40.0, 
-         "label": "Pos: Random Polynomial"},
+         "label": "Pos 206: 3D Lissajous"},
     ]
 
     Ts = 0.05
     
     print("=" * 70)
-    print("四旋翼轨迹生成器测试 - 包含新拆分轨迹")
+    print("四旋翼轨迹生成器测试 - 精简版（仅核心轨迹）")
     print("=" * 70)
-    print("\n新增轨迹:")
-    print("  1001: 俯仰轴阶跃 (25秒) - 0->3->0->8->15 m/s")
-    print("  1002: 滚转轴阶跃 (30秒)")
-    print("  1003: 俯仰-滚转耦合 (30秒)")
-    print("  1011: 正弦扫频低频段 0.01-0.055Hz (30秒)")
-    print("  1012: 正弦扫频高频段 0.055-0.1Hz (30秒)")
+    print("\n支持的轨迹:")
+    print("  1001: 俯仰轴阶跃 (30秒) - 0->3->0->8->15->0 m/s")
+    print("  1012: 正弦扫频高频段 (30秒) - 0.1-0.5Hz, 3-15m/s")
+    print("  1013: 正弦扫频 (30秒) - 0.3Hz, 幅值3→18m/s")
+    print("  1014: 正弦扫频 (30秒) - 幅值8m/s, 频率0.1→0.5Hz")
+    print("  201:  典型组合轨迹 (45秒) - 8字+螺旋+圆形")
+    print("  206:  3D李萨如 (30秒)")
     print("\n" + "=" * 70 + "\n")
     
     # 生成所有轨迹数据
@@ -1141,77 +830,21 @@ if __name__ == "__main__":
     
     plt.tight_layout()
     
-    # 对比图：新拆分轨迹 vs 原始轨迹
-    fig_compare = plt.figure(figsize=(16, 10))
-    fig_compare.suptitle("Comparison: New Split Trajectories vs Original", 
-                        fontsize=16, fontweight='bold')
-    
-    # 对比1: 阶跃轨迹
-    ax1 = fig_compare.add_subplot(2, 2, 1)
-    for info, times, _, velocities, _ in vel_results:
-        if info["xyz"] in [1001, 1002, 1003]:
-            ax1.plot(times, velocities[:, 0], label=f"{info['xyz']}-Vx", linewidth=1.5, alpha=0.7)
-            ax1.plot(times, velocities[:, 1], label=f"{info['xyz']}-Vy", linewidth=1.5, alpha=0.7)
-    ax1.set_xlabel("Time (s)")
-    ax1.set_ylabel("Velocity (m/s)")
-    ax1.set_title("New Split Step Trajectories (1001/1002/1003)")
-    ax1.legend(fontsize=8)
-    ax1.grid(True, alpha=0.3)
-    
-    ax2 = fig_compare.add_subplot(2, 2, 2)
-    for info, times, _, velocities, _ in vel_results:
-        if info["xyz"] == 100:
-            ax2.plot(times, velocities[:, 0], label="100-Vx", linewidth=1.5, alpha=0.7)
-            ax2.plot(times, velocities[:, 1], label="100-Vy", linewidth=1.5, alpha=0.7)
-    ax2.set_xlabel("Time (s)")
-    ax2.set_ylabel("Velocity (m/s)")
-    ax2.set_title("Original Combined Trajectory (100)")
-    ax2.legend(fontsize=8)
-    ax2.grid(True, alpha=0.3)
-    
-    # 对比2: 扫频轨迹
-    ax3 = fig_compare.add_subplot(2, 2, 3)
-    for info, times, _, velocities, _ in vel_results:
-        if info["xyz"] in [1011, 1012]:
-            vel_mag = np.linalg.norm(velocities, axis=1)
-            ax3.plot(times, vel_mag, label=f"{info['xyz']}", linewidth=2, alpha=0.7)
-    ax3.set_xlabel("Time (s)")
-    ax3.set_ylabel("|V| (m/s)")
-    ax3.set_title("New Split Sweep Trajectories (1011/1012)")
-    ax3.legend(fontsize=8)
-    ax3.grid(True, alpha=0.3)
-    
-    ax4 = fig_compare.add_subplot(2, 2, 4)
-    for info, times, _, velocities, _ in vel_results:
-        if info["xyz"] == 101:
-            vel_mag = np.linalg.norm(velocities, axis=1)
-            ax4.plot(times, vel_mag, label="101", linewidth=2, alpha=0.7, color='purple')
-    ax4.set_xlabel("Time (s)")
-    ax4.set_ylabel("|V| (m/s)")
-    ax4.set_title("Original Sweep Trajectory (101)")
-    ax4.legend(fontsize=8)
-    ax4.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    
     # 保存图像
     output_dir = Path("log_trajectories")
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     
-    vel_path = output_dir / f"velocity_trajectories_split_{timestamp}.png"
+    vel_path = output_dir / f"velocity_trajectories_{timestamp}.png"
     pos_path = output_dir / f"position_trajectories_{timestamp}.png"
-    compare_path = output_dir / f"trajectory_comparison_{timestamp}.png"
     
     fig_vel.savefig(vel_path, dpi=200, bbox_inches='tight')
     fig_pos.savefig(pos_path, dpi=200, bbox_inches='tight')
-    fig_compare.savefig(compare_path, dpi=200, bbox_inches='tight')
     
     plt.close('all')
     
     print(f"\n✓ 速度轨迹图保存至: {vel_path}")
     print(f"✓ 位置轨迹图保存至: {pos_path}")
-    print(f"✓ 对比图保存至: {compare_path}")
     print("\n" + "="*70)
-    print("测试完成！新拆分轨迹已验证")
+    print("测试完成！所有轨迹验证通过")
     print("="*70)

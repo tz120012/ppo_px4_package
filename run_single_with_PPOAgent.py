@@ -55,7 +55,9 @@ BASELINE_PID_PARAMS = np.array([
 # ==================== 速度分段PID参数安全范围 ====================
 # 定义三个速度域，每个域有不同的PID参数安全范围（与 px4Env.py 保持一致）
 VELOCITY_BASED_PID_DOMAINS = {
-  # 低速域 (0-5 m/s): 悬停、慢速巡航，允许较大增益范围
+    # 定义三个速度域，每个域有不同的PID参数安全范围
+
+    # 低速域 (0-5 m/s): 悬停、慢速巡航，允许较大增益范围
     'low': {
         'vel_range': (0.0, 5.0),
         'pid_safe_min': np.array([
@@ -63,10 +65,10 @@ VELOCITY_BASED_PID_DOMAINS = {
             10.0, 8,      # velP_xy, velP_z
             18.0, 1.2,      # velI_xy, velI_z
             0.3, 0.6,      # velD_xy, velD_z
-            6.0, 6.0, 2.0, # attP (roll, pitch, yaw)
-            0.4, 0.4, 0.2, # rateP
-            2.5, 2.5, 4.0, # rateI
-            0.006, 0.006, 0.003  # rateD
+            5.0, 5.0, 2.0, # attP (roll, pitch, yaw)
+            0.3, 0.3, 0.2, # rateP
+            1.5, 1.5, 4.0, # rateI
+            0.005, 0.005, 0.003  # rateD
         ], dtype=np.float32),
         'pid_safe_max': np.array([
             1.5, 1.2,      # posP_xy, posP_z
@@ -74,7 +76,7 @@ VELOCITY_BASED_PID_DOMAINS = {
             22.0, 1.8,     # velI_xy, velI_z (允许较大积分)
             0.8, 1.2,      # velD_xy, velD_z
             10.0, 10.0, 4.0, # attP
-            0.6, 0.6, 0.5, # rateP
+            0.8, 0.8, 0.5, # rateP
             3.5, 3.5, 6.0, # rateI
             0.01, 0.01, 0.008  # rateD
         ], dtype=np.float32)
@@ -89,7 +91,7 @@ VELOCITY_BASED_PID_DOMAINS = {
             18, 1.4,      # 提高I增益下限
             0.4, 0.9,      # 提高D增益下限（抑制振荡）
             6, 6, 2.5, # 提高姿态环P增益下限
-            0.45, 0.45, 0.25,
+            0.4, 0.4, 0.25,
             2.0, 2.0, 4.0,
             0.006, 0.006, 0.003
         ], dtype=np.float32),
@@ -98,10 +100,10 @@ VELOCITY_BASED_PID_DOMAINS = {
             12.0, 10.0,    # 适度降低速度环上限
             22.0, 1.8,     # 降低I增益上限（防止积分饱和）
             0.6, 1.1,      # 降低D增益上限
-            10.0, 10.0, 4.0, # 降低姿态环上限
-            0.55, 0.55, 0.35,
-            4, 4, 6,
-            0.01, 0.01, 0.007
+            10.0, 10.0, 4.0, # attP
+            0.8, 0.8, 0.5, # rateP
+            3.5, 3.5, 6.0, # rateI
+            0.01, 0.01, 0.008  # rateD
         ], dtype=np.float32)
     },
     
@@ -113,8 +115,8 @@ VELOCITY_BASED_PID_DOMAINS = {
             7, 8,      # 进一步提高速度环下限
             18, 1.5,      # 提高I增益下限
             0.45, 0.9,      # 更高的D增益下限（强化阻尼）
-            6, 6, 2.5, # 提高姿态环P增益下限
-            0.45, 0.45, 0.25,
+            6.5, 6.5, 2.5, # 提高姿态环P增益下限
+            0.5, 0.5, 0.25,
             2.0, 2.0, 4.0,
             0.006, 0.006, 0.003
         ], dtype=np.float32),
@@ -123,10 +125,10 @@ VELOCITY_BASED_PID_DOMAINS = {
             9, 9,    # 降低速度环上限（防止过冲）
             21, 1.7,     # 大幅降低I增益（高速时积分需谨慎）
             0.55, 1.1,      # 降低D增益上限
-            10.0, 10.0, 4.0, # 降低姿态环上限
-            0.55, 0.55, 0.35,
-            4, 4, 6,
-            0.01, 0.01, 0.007
+            10.0, 10.0, 4.0, # attP
+            0.8, 0.8, 0.5, # rateP
+            3.5, 3.5, 6.0, # rateI
+            0.01, 0.01, 0.008  # rateD
         ], dtype=np.float32)
     }
 }
@@ -574,10 +576,10 @@ def main():
     trajSelect = np.zeros(3)
 
     # 选择控制类型 (0: xyz_pos, 1: xy_vel_z_pos, 2: xyz_vel)
-    ctrlType = ctrlOptions[2]
+    ctrlType = ctrlOptions[0]
     
     # Select Position Trajectory Type
-    trajSelect[0] = 1001
+    trajSelect[0] = 201
 
     # Select Yaw Trajectory Type
     trajSelect[1] = 3

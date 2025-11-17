@@ -1,19 +1,19 @@
 {
-    "control_type": "xyz_vel",
-    "trajectory_type": 1001,
+    "control_type": "xyz_pos",
+    "trajectory_type": 201,
     "yaw_type": 3,
     "max_episode_steps": 6000,
     "sim_dt": 0.005,
     "wind_type": "None",
     "wind_strength": 0.0,
-    "seed": 1001,
+    "seed": 201,
     "buffer_size": 4096,
     "hidden_sizes": [
         128,
         128
     ],
     "epoch": 2000,
-    "step_per_epoch": 6000,
+    "step_per_epoch": 30000,
     "step_per_collect": 2048,
     "repeat_per_collect": 10,
     "batch_size": 256,

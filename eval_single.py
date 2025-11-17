@@ -25,7 +25,7 @@ from px4Env import QuadcopterEnv
 # ============================================================
 # 1️⃣ 加载 checkpoint
 # ============================================================
-ckpt_path = "./logs/log_train_results/1001/251115-195805/best_policy.pth"
+ckpt_path = "./logs/log_train_results/206/251116-230649/best_policy.pth"
 print("=" * 80)
 print(f"📂 加载模型: {ckpt_path}")
 print("=" * 80)
@@ -72,7 +72,7 @@ print(f"   训练轮数: {ckpt.get('epoch', 'Unknown')}")
 # ============================================================
 # 2️⃣ 设置随机种子
 # ============================================================
-seed = args.get("seed", 1001)
+seed = args.get("seed", 201)
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)
@@ -89,7 +89,7 @@ print("=" * 80)
 
 env = QuadcopterEnv(
     control_type=args.get("control_type", "xyz_pos"),
-    trajectory_type=args.get("trajectory_type", 1001),
+    trajectory_type=args.get("trajectory_type", 201),
     yaw_type=args.get("yaw_type", 3),
     dt=args.get("sim_dt", args.get("dt", 0.005)),  
     max_episode_steps=args.get("max_episode_steps", 6000),  

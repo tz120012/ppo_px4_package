@@ -69,7 +69,7 @@ class QuadcopterEnv(gym.Env):
         self.ctrlOptions = ["xyz_pos", "xy_vel_z_pos", "xyz_vel"]
 
         # ==================== 动作空间模式 ====================
-        self.enable_smooth_transition = False
+        self.enable_smooth_transition = True
         self.alpha = 0.3    # 平滑过渡系数（仅在enable_smooth_transition=True时生效）
         
         # 奖励缩放因子
@@ -136,10 +136,10 @@ class QuadcopterEnv(gym.Env):
                     10.0, 8,      # velP_xy, velP_z
                     18.0, 1.2,      # velI_xy, velI_z
                     0.3, 0.6,      # velD_xy, velD_z
-                    6.0, 6.0, 2.0, # attP (roll, pitch, yaw)
-                    0.4, 0.4, 0.2, # rateP
-                    2.5, 2.5, 4.0, # rateI
-                    0.006, 0.006, 0.003  # rateD
+                    5.0, 5.0, 2.0, # attP (roll, pitch, yaw)
+                    0.3, 0.3, 0.2, # rateP
+                    1.5, 1.5, 4.0, # rateI
+                    0.005, 0.005, 0.003  # rateD
                 ], dtype=np.float32),
                 'pid_safe_max': np.array([
                     1.5, 1.2,      # posP_xy, posP_z
@@ -147,7 +147,7 @@ class QuadcopterEnv(gym.Env):
                     22.0, 1.8,     # velI_xy, velI_z (允许较大积分)
                     0.8, 1.2,      # velD_xy, velD_z
                     10.0, 10.0, 4.0, # attP
-                    0.6, 0.6, 0.5, # rateP
+                    0.8, 0.8, 0.5, # rateP
                     3.5, 3.5, 6.0, # rateI
                     0.01, 0.01, 0.008  # rateD
                 ], dtype=np.float32)
@@ -162,7 +162,7 @@ class QuadcopterEnv(gym.Env):
                     18, 1.4,      # 提高I增益下限
                     0.4, 0.9,      # 提高D增益下限（抑制振荡）
                     6, 6, 2.5, # 提高姿态环P增益下限
-                    0.45, 0.45, 0.25,
+                    0.4, 0.4, 0.25,
                     2.0, 2.0, 4.0,
                     0.006, 0.006, 0.003
                 ], dtype=np.float32),
@@ -171,10 +171,10 @@ class QuadcopterEnv(gym.Env):
                     12.0, 10.0,    # 适度降低速度环上限
                     22.0, 1.8,     # 降低I增益上限（防止积分饱和）
                     0.6, 1.1,      # 降低D增益上限
-                    10.0, 10.0, 4.0, # 降低姿态环上限
-                    0.55, 0.55, 0.35,
-                    4, 4, 6,
-                    0.01, 0.01, 0.007
+                    10.0, 10.0, 4.0, # attP
+                    0.8, 0.8, 0.5, # rateP
+                    3.5, 3.5, 6.0, # rateI
+                    0.01, 0.01, 0.008  # rateD
                 ], dtype=np.float32)
             },
             
@@ -186,8 +186,8 @@ class QuadcopterEnv(gym.Env):
                     7, 8,      # 进一步提高速度环下限
                     18, 1.5,      # 提高I增益下限
                     0.45, 0.9,      # 更高的D增益下限（强化阻尼）
-                    6, 6, 2.5, # 提高姿态环P增益下限
-                    0.45, 0.45, 0.25,
+                    6.5, 6.5, 2.5, # 提高姿态环P增益下限
+                    0.5, 0.5, 0.25,
                     2.0, 2.0, 4.0,
                     0.006, 0.006, 0.003
                 ], dtype=np.float32),
@@ -196,10 +196,10 @@ class QuadcopterEnv(gym.Env):
                     9, 9,    # 降低速度环上限（防止过冲）
                     21, 1.7,     # 大幅降低I增益（高速时积分需谨慎）
                     0.55, 1.1,      # 降低D增益上限
-                    10.0, 10.0, 4.0, # 降低姿态环上限
-                    0.55, 0.55, 0.35,
-                    4, 4, 6,
-                    0.01, 0.01, 0.007
+                    10.0, 10.0, 4.0, # attP
+                    0.8, 0.8, 0.5, # rateP
+                    3.5, 3.5, 6.0, # rateI
+                    0.01, 0.01, 0.008  # rateD
                 ], dtype=np.float32)
             }
         }

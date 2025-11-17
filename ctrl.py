@@ -37,15 +37,15 @@ class Control:
         # self.rate_D_gain = np.array([0.008, 0.008, 0.005])
 
 
-        # 中速段：5~10m/s
-        self.pos_P_gain = np.array([1.0, 1.0, 0.8])
-        self.vel_P_gain = np.array([10.0, 10.0, 8.5])
-        self.vel_I_gain = np.array([20.0, 20.0, 1.6])
-        self.vel_D_gain = np.array([0.5, 0.5, 1.0])  
-        self.att_P_gain = np.array([8, 8, 2.75])
-        self.rate_P_gain = np.array([0.5, 0.5, 0.305])
-        self.rate_I_gain = np.array([3.0, 3.0, 5.0])
-        self.rate_D_gain = np.array([0.008, 0.008, 0.005])
+        # # 中速段：5~10m/s
+        # self.pos_P_gain = np.array([1.0, 1.0, 0.8])
+        # self.vel_P_gain = np.array([10.0, 10.0, 8.5])
+        # self.vel_I_gain = np.array([20.0, 20.0, 1.6])
+        # self.vel_D_gain = np.array([0.5, 0.5, 1.0])  
+        # self.att_P_gain = np.array([8, 8, 2.75])
+        # self.rate_P_gain = np.array([0.5, 0.5, 0.305])
+        # self.rate_I_gain = np.array([3.0, 3.0, 5.0])
+        # self.rate_D_gain = np.array([0.008, 0.008, 0.005])
 
         # # # 低速段：0~5m/s
         # self.pos_P_gain = np.array([1.0, 1.0, 0.8])
@@ -58,6 +58,17 @@ class Control:
         # self.rate_D_gain = np.array([0.008, 0.008, 0.005])
 
 
+        # 中速段：5~10m/s
+        self.pos_P_gain = np.array([1.0, 1.0, 0.8])
+        self.vel_P_gain = np.array([10.0, 10.0, 8.5])
+        self.vel_I_gain = np.array([20.0, 20.0, 1.6])
+        self.vel_D_gain = np.array([0.5, 0.5, 1.0])  
+        
+        self.att_P_gain = np.array([8, 8, 2.75])
+        self.rate_P_gain = np.array([0.5, 0.5, 0.305])
+        self.rate_I_gain = np.array([3.0, 3.0, 5.0])
+        self.rate_D_gain = np.array([0.008, 0.008, 0.005])
+
         # Attitude P gains
         self.PpsiStrong = 8
 
@@ -67,16 +78,16 @@ class Control:
         wMax = 5.0
 
         self.velMax = np.array([uMax, vMax, wMax])
-        self.velMaxAll = 20.0
+        self.velMaxAll = 15.0
 
         self.saturateVel_separetely = False
 
         # Max tilt
-        self.tiltMax = 60.0*deg2rad
+        self.tiltMax = 62.0*deg2rad
 
         # Max Rate
-        pMax = 300.0*deg2rad
-        qMax = 300.0*deg2rad
+        pMax = 360.0*deg2rad
+        qMax = 360.0*deg2rad
         rMax = 150.0*deg2rad
 
         self.rateMax = np.array([pMax, qMax, rMax])

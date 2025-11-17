@@ -49,9 +49,9 @@ def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PPO for PX4 Quadcopter PID Optimization")
     
     # 环境参数
-    parser.add_argument("--control-type", type=str, default="xyz_vel", 
+    parser.add_argument("--control-type", type=str, default="xyz_pos", 
                        choices=["xyz_pos", "xy_vel_z_pos", "xyz_vel"])
-    parser.add_argument("--trajectory-type", type=int, default=1001)
+    parser.add_argument("--trajectory-type", type=int, default=201)
     parser.add_argument("--yaw-type", type=int, default=3)
     parser.add_argument("--max-episode-steps", type=int, default=6000)
     parser.add_argument("--sim-dt", type=float, default=0.005)
@@ -59,13 +59,12 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--wind-strength", type=float, default=0.0)
 
     # 训练参数
-    parser.add_argument("--seed", type=int, default=1001)
+    parser.add_argument("--seed", type=int, default=201)
     parser.add_argument("--buffer-size", type=int, default=4096)
     parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[128, 128])
 
-
     parser.add_argument("--epoch", type=int, default=2000)
-    parser.add_argument("--step-per-epoch", type=int, default=6000)
+    parser.add_argument("--step-per-epoch", type=int, default=30000)
     parser.add_argument("--step-per-collect", type=int, default=2048)
     parser.add_argument("--repeat-per-collect", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=256)
