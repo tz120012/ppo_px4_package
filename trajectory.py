@@ -461,6 +461,13 @@ class Trajectory:
         self.helix_radius = 24.0  # X方向最大速度约 15 m/s (24 × 3×2π/30 ≈ 15.1)
         self.helix_num_circles = 3  # 3圈
         self.helix_climb_rate = 10.0 / self.phase_duration  # 30秒内爬升10米
+        
+        # 初始相位偏移：使速度方向与无人机初始航向对齐
+        # 无人机初始航向为0（指向+X），需要螺旋初始速度也指向+X
+        # 速度公式：vel = (-radius*ω*sin(θ), radius*ω*cos(θ), vz)
+        # 要让 vel_x > 0, vel_y = 0：需要 sin(θ)=0, cos(θ)=0（无解）
+        # 改为 θ₀ = -π/2，此时 vel = (radius*ω, 0, vz) → 指向+X ✓
+        self.helix_phase_offset = -np.pi / 2
     
     def _pos_square_only(self, t):
         """xyzType=201: 方形航线（15秒）"""
@@ -528,34 +535,48 @@ class Trajectory:
         self.desAcc[2] = 0
     
     def _pos_helix(self, t):
-        """螺旋爬升轨迹（内部方法）- 从起点位置开始螺旋上升，30秒3圈"""
+        """螺旋爬升轨迹（内部方法）- 从起点位置开始螺旋上升，30秒3圈
+        
+        设计：
+        - 初始速度方向与无人机航向对齐（指向+X）
+        - 从初始位置开始逆时针螺旋上升
+        - 30秒完成3圈，爬升10米
+        """
         radius = self.helix_radius
         num_circles = getattr(self, 'helix_num_circles', 1)  # 默认1圈，向下兼容
         omega = num_circles * 2 * pi / self.phase_duration  # 角频率 = 圈数 × 2π / 周期
         climb_rate = self.helix_climb_rate
+        phase_offset = getattr(self, 'helix_phase_offset', 0.0)  # 初始相位偏移
         
-        # 螺旋的圆心应该偏移，使得t=0时螺旋正好经过初始位置
-        # 如果初始位置是 (x0, y0, z0)，且螺旋在t=0时应该在初始位置
-        # 那么圆心应该在 (x0 - radius, y0, z0)
+        # 当前角度（包含相位偏移）
+        theta = omega * t + phase_offset
+        
+        # 螺旋圆心需要调整，使得t=0时位置在初始点
+        # 在 θ₀=-π/2 时：
+        #   x = center_x + radius*cos(-π/2) = center_x + 0
+        #   y = center_y + radius*sin(-π/2) = center_y - radius
+        # 要让 (x, y) = (start_x, start_y)：
+        #   center_x = start_x
+        #   center_y = start_y + radius
         center = self.helix_center
         initial_height = center[2]
         
-        # 螺旋圆心向左偏移radius，使得t=0时螺旋经过起点
-        circle_center_x = center[0] - radius
-        circle_center_y = center[1]
+        circle_center_x = center[0]  # 不需要偏移
+        circle_center_y = center[1] + radius  # 向+Y偏移radius
         
-        # Z轴高度：在周期内上升，然后重置（周期性）
-        # 使用 t 而不是 t_cycle，因为 t 已经在调用函数中被mod过了
-        self.desPos[0] = circle_center_x + radius * np.cos(omega * t)
-        self.desPos[1] = circle_center_y + radius * np.sin(omega * t)
-        self.desPos[2] = initial_height + climb_rate * t  # t已经是周期内的时间
+        # 位置
+        self.desPos[0] = circle_center_x + radius * np.cos(theta)
+        self.desPos[1] = circle_center_y + radius * np.sin(theta)
+        self.desPos[2] = initial_height + climb_rate * t
         
-        self.desVel[0] = -radius * omega * np.sin(omega * t)
-        self.desVel[1] = radius * omega * np.cos(omega * t)
+        # 速度（在θ=-π/2时：vel_x = radius*ω > 0, vel_y = 0）
+        self.desVel[0] = -radius * omega * np.sin(theta)
+        self.desVel[1] = radius * omega * np.cos(theta)
         self.desVel[2] = climb_rate
         
-        self.desAcc[0] = -radius * omega**2 * np.cos(omega * t)
-        self.desAcc[1] = -radius * omega**2 * np.sin(omega * t)
+        # 加速度（向心加速度指向圆心）
+        self.desAcc[0] = -radius * omega**2 * np.cos(theta)
+        self.desAcc[1] = -radius * omega**2 * np.sin(theta)
         self.desAcc[2] = 0
     
     def _pos_circle_internal(self, t):

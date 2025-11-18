@@ -579,7 +579,7 @@ def main():
     ctrlType = ctrlOptions[0]
     
     # Select Position Trajectory Type
-    trajSelect[0] = 201
+    trajSelect[0] = 203
 
     # Select Yaw Trajectory Type
     trajSelect[1] = 3

@@ -268,9 +268,6 @@ def makeFigures(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, 
     plt.ylabel('Position Error (m)')
     # plt.draw()
 
-
-
-
 def makeFigures_ext(params, time, pos_all, vel_all, quat_all, omega_all, euler_all, commands, wMotor_all, thrust, torque, sDes_traj, sDes_calc,trajSelect,pid_params_all):
     x    = pos_all[:,0]
     y    = pos_all[:,1]

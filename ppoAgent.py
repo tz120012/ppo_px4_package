@@ -11,7 +11,7 @@ import socket
 import struct
 
 # ============ 配置 ============ 
-ACTOR_PATH = "./logs/log_train_results/206/251116-230649/best_policy.pth"
+ACTOR_PATH = "./logs/log_train_results/203/251117-232213/best_policy.pth"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 LOCAL_IP = '127.0.0.1'
